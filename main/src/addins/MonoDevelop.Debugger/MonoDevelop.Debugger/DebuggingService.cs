@@ -50,6 +50,8 @@ using System.Collections.Concurrent;
 using System.Threading;
 using MonoDevelop.Core.Instrumentation;
 using MonoDevelop.Components;
+using Microsoft.VisualStudio.Text;
+using Microsoft.CodeAnalysis.Text;
 
 namespace MonoDevelop.Debugger
 {
@@ -85,6 +87,7 @@ namespace MonoDevelop.Debugger
 		static public event EventHandler CallStackChanged;
 		static public event EventHandler CurrentFrameChanged;
 		static public event EventHandler ExecutionLocationChanged;
+		static public event EventHandler VariableChanged;
 		static public event EventHandler DisassemblyRequested;
 		static public event EventHandler<DocumentEventArgs> DisableConditionalCompilation;
 
@@ -93,8 +96,8 @@ namespace MonoDevelop.Debugger
 		static DebuggingService ()
 		{
 			executionHandlerFactory = new DebugExecutionHandlerFactory ();
-			TextEditorService.LineCountChanged += OnLineCountChanged;
 			IdeApp.Initialized += delegate {
+				IdeServices.TextEditorService.LineCountChanged += OnLineCountChanged;
 				IdeApp.Workspace.StoringUserPreferences += OnStoreUserPrefs;
 				IdeApp.Workspace.LoadingUserPreferences += OnLoadUserPrefs;
 				IdeApp.Workspace.LastWorkspaceItemClosed += OnSolutionClosed;
@@ -109,6 +112,15 @@ namespace MonoDevelop.Debugger
 				evaluators = null;
 			});
 			IdeApp.Exiting += IdeApp_Exiting;
+			FileService.FileRenamed += FileService_FileRenamed;
+			FileService.FileMoved += FileService_FileRenamed;
+		}
+
+		private static void FileService_FileRenamed (object sender, FileCopyEventArgs e)
+		{
+			foreach (var file in e) {
+				breakpoints.FileRenamed (file.SourceFile, file.TargetFile);
+			}
 		}
 
 		static void IdeApp_Exiting (object sender, ExitEventArgs args)
@@ -174,12 +186,10 @@ namespace MonoDevelop.Debugger
 			if (liveUpdate) {
 				var bp = pinnedWatches.CreateLiveUpdateBreakpoint (watch);
 				pinnedWatches.Bind (watch, bp);
-				lock (breakpoints)
-					breakpoints.Add(bp);
+				breakpoints.Add(bp);
 			} else {
 				pinnedWatches.Bind (watch, null);
-				lock (breakpoints)
-					breakpoints.Remove (watch.BoundTracer);
+				breakpoints.Remove (watch.BoundTracer);
 			}
 		}
 
@@ -286,7 +296,8 @@ namespace MonoDevelop.Debugger
 		public static bool ShowBreakpointProperties (ref BreakEvent bp, BreakpointType breakpointType = BreakpointType.Location)
 		{
 			using (var dlg = new BreakpointPropertiesDialog (bp, breakpointType)) {
-				Xwt.Command response = dlg.Run ();
+				Xwt.WindowFrame parentWindow = Xwt.Toolkit.CurrentEngine.WrapWindow (IdeApp.Workbench.RootWindow);
+				Xwt.Command response = dlg.Run (parentWindow);
 				if (bp == null)
 					bp = dlg.GetBreakEvent ();
 				return response == Xwt.Command.Ok;
@@ -640,6 +651,7 @@ namespace MonoDevelop.Debugger
 			return new DebuggerSessionOptions {
 				StepOverPropertiesAndOperators = PropertyService.Get ("MonoDevelop.Debugger.DebuggingService.StepOverPropertiesAndOperators", true),
 				ProjectAssembliesOnly = PropertyService.Get ("MonoDevelop.Debugger.DebuggingService.ProjectAssembliesOnly", true),
+				AutomaticSourceLinkDownload = PropertyService.Get ("MonoDevelop.Debugger.DebuggingService.AutomaticSourceDownload", AutomaticSourceDownload.Ask),
 				EvaluationOptions = eval,
 			};
 		}
@@ -648,6 +660,7 @@ namespace MonoDevelop.Debugger
 		{
 			PropertyService.Set ("MonoDevelop.Debugger.DebuggingService.StepOverPropertiesAndOperators", options.StepOverPropertiesAndOperators);
 			PropertyService.Set ("MonoDevelop.Debugger.DebuggingService.ProjectAssembliesOnly", options.ProjectAssembliesOnly);
+			PropertyService.Set ("MonoDevelop.Debugger.DebuggingService.AutomaticSourceDownload", options.AutomaticSourceLinkDownload);
 
 			PropertyService.Set ("MonoDevelop.Debugger.DebuggingService.AllowTargetInvoke", options.EvaluationOptions.AllowTargetInvoke);
 			PropertyService.Set ("MonoDevelop.Debugger.DebuggingService.AllowToStringCalls", options.EvaluationOptions.AllowToStringCalls);
@@ -892,6 +905,23 @@ namespace MonoDevelop.Debugger
 			await Runtime.RunInMainThread (delegate {
 				busyEvaluator.UpdateBusyState (args);
 				if (args.IsBusy) {
+					var session = (DebuggerSession) s;
+
+					if (sessions.TryGetValue (session, out var manager)) {
+						var metadata = new Dictionary<string, object> {
+							["DebuggerType"] = manager.Engine.Id,
+							["Debugger.AsyncOperation.Description"] = args.Description,
+							["Debugger.EvaluationOptions.AllowDisplayStringEvaluation"] = args.EvaluationContext.Options.AllowDisplayStringEvaluation,
+							["Debugger.EvaluationOptions.AllowMethodEvaluation"] = args.EvaluationContext.Options.AllowMethodEvaluation,
+							["Debugger.EvaluationOptions.AllowTargetInvoke"] = args.EvaluationContext.Options.AllowTargetInvoke,
+							["Debugger.EvaluationOptions.AllowToStringCalls"] = args.EvaluationContext.Options.AllowToStringCalls,
+							["Debugger.EvaluationOptions.ChunkRawStrings"] = args.EvaluationContext.Options.ChunkRawStrings,
+							["Debugger.EvaluationOptions.EvaluationTimeout"] = args.EvaluationContext.Options.EvaluationTimeout,
+						};
+
+						Counters.DebuggerBusy.Inc (1, null, metadata);
+					}
+
 					if (busyStatusIcon == null) {
 						busyStatusIcon = IdeApp.Workbench.StatusBar.ShowStatusIcon (ImageService.GetIcon ("md-bug", Gtk.IconSize.Menu));
 						busyStatusIcon.SetAlertMode (100);
@@ -997,10 +1027,8 @@ namespace MonoDevelop.Debugger
 					sessionManager.StartTimer?.Dispose ();
 					sessionManager.StartTimer = null;
 
-					if (Ide.Counters.TrackingBuildAndDeploy) {
-						Ide.Counters.BuildAndDeploy.EndTiming ();
-						Ide.Counters.TrackingBuildAndDeploy = false;
-					}
+					Ide.Counters.BuildAndDeployTracker?.End ();
+					Ide.Counters.BuildAndDeployTracker = null;
 					break;
 				}
 			} catch (Exception ex) {
@@ -1050,22 +1078,26 @@ namespace MonoDevelop.Debugger
 		static void NotifyLocationChanged ()
 		{
 			Runtime.AssertMainThread ();
-			if (ExecutionLocationChanged != null)
-				ExecutionLocationChanged (null, EventArgs.Empty);
+
+			ExecutionLocationChanged?.Invoke (null, EventArgs.Empty);
 		}
 
 		static void NotifyCurrentFrameChanged ()
 		{
 			if (currentBacktrace != null)
 				pinnedWatches.InvalidateAll ();
-			if (CurrentFrameChanged != null)
-				CurrentFrameChanged (null, EventArgs.Empty);
+
+			CurrentFrameChanged?.Invoke (null, EventArgs.Empty);
 		}
 
 		static void NotifyCallStackChanged ()
 		{
-			if (CallStackChanged != null)
-				CallStackChanged (null, EventArgs.Empty);
+			CallStackChanged?.Invoke (null, EventArgs.Empty);
+		}
+
+		internal static void NotifyVariableChanged ()
+		{
+			VariableChanged?.Invoke (null, EventArgs.Empty);
 		}
 
 		public static void Stop ()
@@ -1313,18 +1345,24 @@ namespace MonoDevelop.Debugger
 
 		static void OnLineCountChanged (object ob, LineCountEventArgs a)
 		{
-			lock (breakpoints) {
-				foreach (Breakpoint bp in breakpoints.GetBreakpoints ()) {
-					if (bp.FileName == a.TextFile.Name) {
-						if (bp.Line > a.LineNumber) {
-							// If the line that has the breakpoint is deleted, delete the breakpoint, otherwise update the line #.
-							if (bp.Line + a.LineCount >= a.LineNumber)
-								breakpoints.UpdateBreakpointLine (bp, bp.Line + a.LineCount);
-							else
-								breakpoints.Remove (bp);
-						} else if (bp.Line == a.LineNumber && a.LineCount < 0)
+			foreach (var bp in breakpoints.GetBreakpoints ()) {
+				if (bp.FileName == a.TextFile.Name) {
+					if (bp.Line > a.LineNumber) {
+						var startIndex = a.TextFile.GetPositionFromLineColumn (bp.Line, bp.Column);
+						var endIndex = a.TextFile.GetPositionFromLineColumn (bp.Line + 1, 0) - 1;
+
+						if (endIndex < startIndex)
+							endIndex = startIndex;
+
+						var text = a.TextFile.GetText (startIndex, endIndex);
+
+						// If the line that has the breakpoint is deleted, delete the breakpoint, otherwise update the line #.
+						if (bp.Line + a.LineCount >= a.LineNumber && !string.IsNullOrWhiteSpace (text))
+							breakpoints.UpdateBreakpointLine (bp, bp.Line + a.LineCount);
+						else
 							breakpoints.Remove (bp);
-					}
+					} else if (bp.Line == a.LineNumber && a.LineCount < 0)
+						breakpoints.Remove (bp);
 				}
 			}
 		}
@@ -1332,8 +1370,7 @@ namespace MonoDevelop.Debugger
 		static void OnStoreUserPrefs (object s, UserPreferencesEventArgs args)
 		{
 			var baseDir = (args.Item as Solution)?.BaseDirectory;
-			lock (breakpoints)
-				args.Properties.SetValue ("MonoDevelop.Ide.DebuggingService.Breakpoints", breakpoints.Save (baseDir));
+			args.Properties.SetValue ("MonoDevelop.Ide.DebuggingService.Breakpoints", breakpoints.Save (baseDir));
 			args.Properties.SetValue ("MonoDevelop.Ide.DebuggingService.PinnedWatches", pinnedWatches);
 		}
 
@@ -1343,47 +1380,84 @@ namespace MonoDevelop.Debugger
 
 			if (elem != null) {
 				var baseDir = (args.Item as Solution)?.BaseDirectory;
-				lock (breakpoints)
-					breakpoints.Load (elem, baseDir);
+				breakpoints.Load (elem, baseDir);
 			}
 
 			PinnedWatchStore wstore = args.Properties.GetValue<PinnedWatchStore> ("MonoDevelop.Ide.DebuggingService.PinnedWatches");
 			if (wstore != null)
 				pinnedWatches.LoadFrom (wstore);
 
-			lock (breakpoints)
-				pinnedWatches.BindAll (breakpoints);
+			pinnedWatches.BindAll (breakpoints);
 
-			lock (breakpoints)
-				pinnedWatches.SetAllLiveUpdateBreakpoints (breakpoints);
+			pinnedWatches.SetAllLiveUpdateBreakpoints (breakpoints);
 
 			return Task.FromResult (true);
 		}
 
 		static void OnSolutionClosed (object s, EventArgs args)
 		{
-			lock (breakpoints)
-				breakpoints.Clear ();
+			breakpoints.Clear ();
+		}
+
+		static Microsoft.CodeAnalysis.ISymbol GetLanguageItem (MonoDevelop.Ide.Gui.Document document, SourceLocation sourceLocation, string identifier)
+		{
+			var textBuffer = document.GetContent<ITextBuffer> (true);
+			if (textBuffer == null)
+				return null;
+
+			var currentSnapshot = textBuffer.CurrentSnapshot;
+			var roslynDocument = currentSnapshot.GetOpenDocumentInCurrentContextWithChanges ();
+			if (roslynDocument == null)
+				return null;
+
+			var model = roslynDocument.GetSemanticModelAsync ().WaitAndGetResult ();
+			if (model == null)
+				return null;
+
+			int index = identifier.LastIndexOf ("`", System.StringComparison.Ordinal);
+			int arity = 0;
+			if (index != -1) {
+				try {
+					arity = int.Parse (identifier.Substring (index + 1));
+				} catch {
+					return null;
+				}
+				identifier = identifier.Remove (index);
+			}
+			var line = currentSnapshot.GetLineFromLineNumber (sourceLocation.Line - 1);
+			foreach (var symbol in model.LookupSymbols (line.Start.Position + sourceLocation.Column - 1, name: identifier)) {
+				var typeSymbol = symbol as Microsoft.CodeAnalysis.INamedTypeSymbol;
+				if (typeSymbol != null && (arity == 0 || arity == typeSymbol.Arity)) {
+					return symbol;
+				}
+				var namespaceSymbol = symbol as Microsoft.CodeAnalysis.INamespaceSymbol;
+				if (namespaceSymbol != null) {
+					return namespaceSymbol;
+				}
+			}
+			return null;
 		}
 
 		static string ResolveType (string identifier, SourceLocation location)
 		{
 			Document doc = IdeApp.Workbench.GetDocument (location.FileName);
 			if (doc != null) {
-				ITextEditorResolver textEditorResolver = doc.GetContent<ITextEditorResolver> ();
-				if (textEditorResolver != null) {
-					var rr = textEditorResolver.GetLanguageItem (doc.Editor.LocationToOffset (location.Line, 1), identifier);
-					var ns = rr as Microsoft.CodeAnalysis.INamespaceSymbol;
-					if (ns != null)
-						return ns.ToDisplayString (Microsoft.CodeAnalysis.SymbolDisplayFormat.CSharpErrorMessageFormat);
-					var result = rr as Microsoft.CodeAnalysis.INamedTypeSymbol;
-					if (result != null && !(result.TypeKind == Microsoft.CodeAnalysis.TypeKind.Dynamic && result.ToDisplayString (Microsoft.CodeAnalysis.SymbolDisplayFormat.CSharpErrorMessageFormat) == "dynamic")) {
-						return result.ToDisplayString (new Microsoft.CodeAnalysis.SymbolDisplayFormat (
-							typeQualificationStyle: Microsoft.CodeAnalysis.SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
-							miscellaneousOptions:
-							Microsoft.CodeAnalysis.SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers |
-							Microsoft.CodeAnalysis.SymbolDisplayMiscellaneousOptions.UseSpecialTypes));
-					}
+				Microsoft.CodeAnalysis.ISymbol rr = null;
+				if (doc.GetContent<ITextEditorResolver> (true) is ITextEditorResolver textEditorResolver) {
+					rr = textEditorResolver.GetLanguageItem (doc.Editor.LocationToOffset (location.Line, 1), identifier);
+				} else {
+					rr = GetLanguageItem (doc, location, identifier);
+				}
+				var ns = rr as Microsoft.CodeAnalysis.INamespaceSymbol;
+				if (ns != null)
+					return ns.ToDisplayString (Microsoft.CodeAnalysis.SymbolDisplayFormat.CSharpErrorMessageFormat);
+				var result = rr as Microsoft.CodeAnalysis.INamedTypeSymbol;
+				if (result != null && !(result.TypeKind == Microsoft.CodeAnalysis.TypeKind.Dynamic && result.ToDisplayString (Microsoft.CodeAnalysis.SymbolDisplayFormat.CSharpErrorMessageFormat) == "dynamic")) {
+					return result.ToDisplayString (new Microsoft.CodeAnalysis.SymbolDisplayFormat (
+						typeQualificationStyle: Microsoft.CodeAnalysis.SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+						miscellaneousOptions:
+						Microsoft.CodeAnalysis.SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers |
+						Microsoft.CodeAnalysis.SymbolDisplayMiscellaneousOptions.UseSpecialTypes));
 				}
 			}
 			return null;
@@ -1406,23 +1480,44 @@ namespace MonoDevelop.Debugger
 			return info != null ? info.Evaluator : null;
 		}
 
-		static Task<CompletionData> GetExpressionCompletionData (string exp, StackFrame frame, CancellationToken token)
+		static Task<CompletionData> GetExpressionCompletionDataAsync (string exp, StackFrame frame, CancellationToken token)
 		{
 			Document doc = IdeApp.Workbench.GetDocument (frame.SourceLocation.FileName);
 			if (doc == null)
 				return null;
-			var completionProvider = doc.GetContent<IDebuggerCompletionProvider> ();
+			var completionProvider = doc.GetContent<IDebuggerCompletionProvider> (true);
 			if (completionProvider == null)
 				return null;
-			return completionProvider.GetExpressionCompletionData (exp, frame, token);
+			return completionProvider.GetExpressionCompletionDataAsync (exp, frame, token);
 		}
 
 		public static async Task<CompletionData> GetCompletionDataAsync (StackFrame frame, string exp, CancellationToken token = default (CancellationToken))
 		{
-			var result = await GetExpressionCompletionData (exp, frame, token);
+			var result = await GetExpressionCompletionDataAsync (exp, frame, token);
 			if (result != null)
 				return result;
 			return frame.GetExpressionCompletionData (exp);
+		}
+
+		public static Task<Span> GetBreakpointSpanAsync (ITextDocument document, int position, CancellationToken cancellationToken = default (CancellationToken))
+		{
+			var doc = IdeApp.Workbench.GetDocument (document.FilePath);
+			IBreakpointSpanResolver resolver = null;
+			ITextBuffer buffer;
+
+			if (doc != null) {
+				resolver = doc.GetContent<IBreakpointSpanResolver> ();
+				buffer = doc.TextBuffer;
+			} else {
+				buffer = document.TextBuffer;
+			}
+
+			if (buffer == null)
+				return Task.FromResult (default (Span));
+
+			resolver = resolver ?? new DefaultBreakpointSpanResolver ();
+
+			return resolver.GetBreakpointSpanAsync (buffer, position, cancellationToken);
 		}
 	}
 

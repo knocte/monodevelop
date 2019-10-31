@@ -43,6 +43,8 @@ using CustomCommand = MonoDevelop.Projects.CustomCommand;
 using System.Linq;
 using MonoDevelop.Ide.Projects;
 using MonoDevelop.Projects.Policies;
+using MonoDevelop.Core.FeatureConfiguration;
+using MonoDevelop.Ide.Projects.FileNesting;
 
 namespace MonoDevelop.Ide.Commands
 {
@@ -88,7 +90,9 @@ namespace MonoDevelop.Ide.Commands
 		SelectActiveRuntime,
 		EditSolutionItem,
 		Unload,
-		SetStartupProjects
+		SetStartupProjects,
+		AddEmptyClass,
+		ToggleFileNesting
 	}
 
 	internal class SolutionOptionsHandler : CommandHandler
@@ -147,7 +151,7 @@ namespace MonoDevelop.Ide.Commands
 				if (!sol.MultiStartupRunConfigurations.Any ()) {
 					Xwt.Toolkit.NativeEngine.Invoke (() => {
 						using (var dlg = new NewSolutionRunConfigurationDialog ()) {
-							if (dlg.Run ().Id == "create") {
+							if (dlg.Run (IdeServices.DesktopService.GetFocusedTopLevelWindow ()).Id == "create") {
 								config = new MultiItemSolutionRunConfiguration (dlg.RunConfigurationName, dlg.RunConfigurationName);
 								sol.MultiStartupRunConfigurations.Add (config);
 								sol.StartupConfiguration = config;
@@ -504,7 +508,9 @@ namespace MonoDevelop.Ide.Commands
 	{
 		protected override void Update (CommandArrayInfo info)
 		{
-			if (IdeApp.Workspace.IsOpen && Runtime.SystemAssemblyService.GetTargetRuntimes ().Count () > 1) {
+			var enabled = FeatureSwitchService.IsFeatureEnabled ("RUNTIME_SELECTOR");
+
+			if (enabled.GetValueOrDefault () && IdeApp.Workspace.IsOpen && Runtime.SystemAssemblyService.GetTargetRuntimes ().Count () > 1) {
 				foreach (var tr in Runtime.SystemAssemblyService.GetTargetRuntimes ()) {
 					var item = info.Add (tr.DisplayName, tr);
 					if (tr == IdeApp.Workspace.ActiveRuntime)
@@ -593,6 +599,25 @@ namespace MonoDevelop.Ide.Commands
 			var context = new ProjectOperationContext ();
 			context.GlobalProperties.SetValue ("RunCodeAnalysisOnce", "true");
 			IdeApp.ProjectOperations.Rebuild (IdeApp.ProjectOperations.CurrentSelectedProject, context);
+		}
+	}
+
+	internal class ToggleFileNestingHandler : CommandHandler
+	{
+		const string PropertyName = "MonoDevelop.Ide.FileNesting.Enabled";
+		protected override void Update (CommandInfo info)
+		{
+			var solution = IdeApp.ProjectOperations.CurrentSelectedSolution;
+			info.Visible = solution != null && solution.GetAllProjects ().Any (FileNestingService.AppliesToProject);
+			if (info.Visible) {
+				info.Checked = IdeApp.ProjectOperations.CurrentSelectedSolution.UserProperties.GetValue<bool> (PropertyName, true);
+			}
+		}
+
+		protected override void Run ()
+		{
+			bool enabled = IdeApp.ProjectOperations.CurrentSelectedSolution.UserProperties.GetValue<bool> (PropertyName, true);
+			IdeApp.ProjectOperations.CurrentSelectedSolution.UserProperties.SetValue (PropertyName, !enabled);
 		}
 	}
 }

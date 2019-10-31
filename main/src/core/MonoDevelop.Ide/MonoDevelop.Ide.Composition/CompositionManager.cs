@@ -1,4 +1,4 @@
-﻿// CompositionManager.cs
+// CompositionManager.cs
 //
 // Author:
 //   Kirill Osenkov <https://github.com/KirillOsenkov>
@@ -46,9 +46,9 @@ namespace MonoDevelop.Ide.Composition
 	/// <summary>
 	/// The host of the MonoDevelop MEF composition. Uses https://github.com/Microsoft/vs-mef.
 	/// </summary>
-	public partial class CompositionManager
+	[DefaultServiceImplementation]
+	public partial class CompositionManager: Service
 	{
-		static Task<CompositionManager> creationTask;
 		static CompositionManager instance;
 
 		static readonly Resolver StandardResolver = Resolver.DefaultInstance;
@@ -56,45 +56,45 @@ namespace MonoDevelop.Ide.Composition
 			new AttributedPartDiscoveryV1 (StandardResolver),
 			new AttributedPartDiscovery (StandardResolver, true));
 
+		static Action HandleMefQueriedBeforeCompletion = UninitializedLogWarning;
+
+		static void UninitializedLogWarning ()
+			=> LoggingService.LogWarning ("UI thread queried MEF while it was still being built:{0}{1}", Environment.NewLine, Environment.StackTrace);
+
+		static void UninitializedThrowException ()
+			=> throw new InvalidOperationException ("MEF queried while it was still being built");
+
+		internal static void ConfigureUninitializedMefHandling (bool throwException)
+			=> HandleMefQueriedBeforeCompletion = throwException ? new Action (UninitializedThrowException) : new Action (UninitializedLogWarning);
+
 		public static CompositionManager Instance {
 			get {
 				if (instance == null) {
-					var task = InitializeAsync ();
+					var task = Runtime.GetService<CompositionManager> ();
 					if (!task.IsCompleted && Runtime.IsMainThread) {
-						LoggingService.LogInfo ("UI thread queried MEF while it was still being built:{0}{1}", Environment.NewLine, Environment.StackTrace);
+						HandleMefQueriedBeforeCompletion ();
 					}
-					instance = task.Result;
+					instance = task.WaitAndGetResult ();
 				}
 
 				return instance;
 			}
 		}
 
-		/// <summary>
-		/// Starts initializing the MEF composition on a background thread. Thread-safe.
-		/// </summary>
-		public static Task<CompositionManager> InitializeAsync ()
+		protected override Task OnInitialize (ServiceProvider serviceProvider)
 		{
-			if (creationTask == null) {
-				lock (typeof (CompositionManager)) {
-					if (creationTask == null) {
-						creationTask = Task.Run (() => CreateInstanceAsync ());
-					}
-				}
-			}
-
-			return creationTask;
+			return Task.Run (async () => await InitializeInstanceAsync ());
 		}
 
 		/// <summary>
 		/// Returns an instance of type T that is exported by some composition part. The instance is shared (singleton).
 		/// </summary>
-		public static T GetExportedValue<T> () => Instance.ExportProvider.GetExportedValue<T> ();
+		public T GetExportedValue<T> () => ExportProvider.GetExportedValue<T> ();
 
 		/// <summary>
 		/// Returns all instances of type T that are exported by some composition part. The instances are shared (singletons).
 		/// </summary>
-		public static IEnumerable<T> GetExportedValues<T> () => Instance.ExportProvider.GetExportedValues<T> ();
+		public IEnumerable<T> GetExportedValues<T> () => ExportProvider.GetExportedValues<T> ();
 
 		/// <summary>
 		/// Returns a lazy holding the instance of type T that is exported by some composition part. The instance is shared (singleton).
@@ -110,17 +110,9 @@ namespace MonoDevelop.Ide.Composition
 		public IExportProviderFactory ExportProviderFactory { get; private set; }
 		public ExportProvider ExportProvider { get; private set; }
 		public HostServices HostServices { get; private set; }
-		public System.ComponentModel.Composition.Hosting.ExportProvider ExportProviderV1 { get; private set; }
 
 		internal CompositionManager ()
 		{
-		}
-
-		static async Task<CompositionManager> CreateInstanceAsync ()
-		{
-			var compositionManager = new CompositionManager ();
-			await compositionManager.InitializeInstanceAsync ();
-			return compositionManager;
 		}
 
 		async Task InitializeInstanceAsync ()
@@ -136,7 +128,7 @@ namespace MonoDevelop.Ide.Composition
 				timings ["ReadFromAddins"] = stepTimer.ElapsedMilliseconds;
 				stepTimer.Restart ();
 
-				var caching = new Caching (mefAssemblies);
+				var caching = new Caching (mefAssemblies, new IdeRuntimeCompositionExceptionHandler ());
 
 				// Try to use cached MEF data
 
@@ -162,8 +154,7 @@ namespace MonoDevelop.Ide.Composition
 
 				ExportProviderFactory = RuntimeComposition.CreateExportProviderFactory ();
 				ExportProvider = ExportProviderFactory.CreateExportProvider ();
-				HostServices = MefV1HostServices.Create (ExportProvider.AsExportProvider ());
-				ExportProviderV1 = NetFxAdapters.AsExportProvider (ExportProvider);
+				HostServices = Microsoft.VisualStudio.LanguageServices.VisualStudioMefHostServices.Create (ExportProvider);
 
 				timings ["CreateServices"] = stepTimer.ElapsedMilliseconds;
 				metadata.Duration = fullTimer.ElapsedMilliseconds;
@@ -256,6 +247,46 @@ namespace MonoDevelop.Ide.Composition
 						}
 					}
 				}
+			}
+		}
+
+		sealed class IdeRuntimeCompositionExceptionHandler : RuntimeCompositionExceptionHandler
+		{
+			static class Strings
+			{
+				public static string Quit = GettextCatalog.GetString ("Quit");
+				public static string Restart = GettextCatalog.GetString ("Restart");
+			}
+
+			public override void HandleException (string message, Exception e)
+			{
+				base.HandleException (message, e);
+
+				if (e is IOException)
+					return;
+
+				if (!IdeApp.IsInitialized) {
+					Console.WriteLine (e);
+					return;
+				}
+
+				var text = GettextCatalog.GetString ("There was a problem loading one or more extensions and {0} needs to be restarted.", BrandingService.ApplicationName);
+				var quitButton = new AlertButton (Strings.Quit);
+				var restartButton = new AlertButton (Strings.Restart);
+
+				var result = MessageService.GenericAlert (
+					IdeServices.DesktopService.GetFocusedTopLevelWindow (),
+					Gui.Stock.Error,
+					text,
+					secondaryText: null,
+					defaultButton: 1,
+					quitButton,
+					restartButton
+				);
+				if (result == restartButton)
+					IdeApp.Restart (false).Ignore ();
+				else
+					IdeApp.Exit ().Ignore ();
 			}
 		}
 	}

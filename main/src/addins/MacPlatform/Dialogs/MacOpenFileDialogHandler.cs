@@ -1,4 +1,4 @@
-// 
+﻿// 
 // MacSelectFileDialogHandler.cs
 //  
 // Author:
@@ -30,14 +30,14 @@ using System.Linq;
 using System.Text;
 
 using AppKit;
-
+using Foundation;
 using MonoDevelop.Components;
 using MonoDevelop.Core;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.Extensions;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.MacInterop;
-
+using MonoDevelop.Projects.Text;
 
 namespace MonoDevelop.MacIntegration
 {
@@ -62,13 +62,13 @@ namespace MonoDevelop.MacIntegration
 		protected override NSSavePanel OnCreatePanel (OpenFileDialogData data)
 		{
 			if (data.Action == FileChooserAction.Save) {
-				return new NSSavePanel ();
+				return NSSavePanel.SavePanel;
 			}
 
-			return new NSOpenPanel {
-				CanChooseDirectories = (data.Action & FileChooserAction.FolderFlags) != 0,
-				CanChooseFiles = (data.Action & FileChooserAction.FileFlags) != 0,
-			};
+			var openPanel = NSOpenPanel.OpenPanel;
+			openPanel.CanChooseDirectories = (data.Action & FileChooserAction.FolderFlags) != 0;
+			openPanel.CanChooseFiles = (data.Action & FileChooserAction.FileFlags) != 0;
+			return openPanel;
 		}
 
 		public bool Run (OpenFileDialogData data)
@@ -107,15 +107,18 @@ namespace MonoDevelop.MacIntegration
 							state.EncodingSelector.Enabled = !slnViewerSelected;
 					};
 
+					var parent = data.TransientFor ?? MessageService.RootWindow;
+
+					// TODO: support for data.CenterToParent, we could use sheeting.
 					if (panel.RunModal () == 0 && !pathAlreadySet) {
-						DesktopService.FocusWindow (data.TransientFor ?? MessageService.RootWindow);
+						IdeServices.DesktopService.FocusWindow (parent);
 						return false;
 					}
 					if (!pathAlreadySet)
 						data.SelectedFiles = MacSelectFileDialogHandler.GetSelectedFiles (panel);
 
 					if (state.EncodingSelector != null)
-						data.Encoding = state.EncodingSelector.SelectedEncodingId > 0 ? Encoding.GetEncoding (state.EncodingSelector.SelectedEncodingId) : null;
+						data.Encoding = state.EncodingSelector.SelectedEncoding?.Encoding;
 
 					if (state.ViewerSelector != null) {
 						if (state.CloseSolutionButton != null)
@@ -124,7 +127,7 @@ namespace MonoDevelop.MacIntegration
 							state.CurrentViewers [(int)state.ViewerSelector.IndexOfSelectedItem] : null;
 					}
 
-					DesktopService.FocusWindow (data.TransientFor ?? MessageService.RootWindow);
+					IdeServices.DesktopService.FocusWindow (parent);
 				}
 			} catch (Exception ex) {
 				LoggingService.LogInternalError ("Error in Open File dialog", ex);
@@ -141,9 +144,8 @@ namespace MonoDevelop.MacIntegration
 			List<FileViewer> currentViewers = null;
 
 			if (data.ShowEncodingSelector) {
-				encodingSelector = new SelectEncodingPopUpButton (data.Action != FileChooserAction.Save) {
-					SelectedEncodingId = data.Encoding != null ? data.Encoding.CodePage : 0
-				};
+				encodingSelector = new SelectEncodingPopUpButton (data.Action != FileChooserAction.Save);
+				encodingSelector.SelectedEncoding = TextEncoding.GetEncoding (data.Encoding);
 
 				controls.Add ((encodingSelector, GettextCatalog.GetString ("Encoding:")));
 			}
@@ -207,7 +209,7 @@ namespace MonoDevelop.MacIntegration
 			int i = 0;
 			bool hasWorkbenchViewer = false;
 
-			if (IdeApp.Services.ProjectService.IsWorkspaceItemFile (filename) || IdeApp.Services.ProjectService.IsSolutionItemFile (filename)) {
+			if (IdeServices.ProjectService.IsWorkspaceItemFile (filename) || IdeServices.ProjectService.IsSolutionItemFile (filename)) {
 				button.Menu.AddItem (new NSMenuItem { Title = GettextCatalog.GetString ("Solution Workbench") });
 				currentViewers.Add (null);
 				
@@ -220,7 +222,7 @@ namespace MonoDevelop.MacIntegration
 				i++;
 			}
 			
-			foreach (var vw in DisplayBindingService.GetFileViewers (filename, null)) {
+			foreach (var vw in IdeServices.DisplayBindingService.GetFileViewers (filename, null).Result) {
 				if (!vw.IsExternal) {
 					button.Menu.AddItem (new NSMenuItem { Title = vw.Title });
 					currentViewers.Add (vw);

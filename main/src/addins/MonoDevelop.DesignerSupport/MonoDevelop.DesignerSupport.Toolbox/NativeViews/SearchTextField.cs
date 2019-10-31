@@ -29,16 +29,24 @@
 #if MAC
 using System;
 using AppKit;
+using Foundation;
 
 namespace MonoDevelop.DesignerSupport.Toolbox.NativeViews
 {
-	class SearchTextField : NSSearchField, INativeChildView
+	enum SearchTextFieldCommand
+	{
+		InsertTab,
+		InsertBacktab
+	}
+
+	class SearchTextField : NSSearchField, INSSearchFieldDelegate
 	{
 		public event EventHandler Focused;
+		public event EventHandler<SearchTextFieldCommand> CommandRaised;
 
 		public SearchTextField ()
 		{
-			TranslatesAutoresizingMaskIntoConstraints = false;
+			Delegate = this;
 		}
 
 		public override bool BecomeFirstResponder ()
@@ -47,19 +55,20 @@ namespace MonoDevelop.DesignerSupport.Toolbox.NativeViews
 			return base.BecomeFirstResponder ();
 		}
 
-		#region INativeChildView
-
-		public void OnKeyPressed (object o, Gtk.KeyPressEventArgs ev)
+		[Export ("control:textView:doCommandBySelector:")]
+		bool CommandBySelector (NSControl control, NSTextField field, ObjCRuntime.Selector sel)
 		{
+			switch (sel.Name) {
+			case "insertTab:": // down arrow
+				CommandRaised?.Invoke (this, SearchTextFieldCommand.InsertTab);
+				return true;
 
+			case "insertBacktab:": // up arrow
+				CommandRaised?.Invoke (this, SearchTextFieldCommand.InsertBacktab);
+				return true;
+			}
+			return false;
 		}
-
-		public void OnKeyReleased (object o, Gtk.KeyReleaseEventArgs ev)
-		{
-
-		}
-
-		#endregion
 	}
 }
 #endif

@@ -26,6 +26,10 @@
     <ExternalConsole>true</ExternalConsole>
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
+  <PropertyGroup Condition=" '$(RunConfiguration)' == 'Default' ">
+    <StartAction>Project</StartAction>
+    <ExternalConsole>false</ExternalConsole>
+  </PropertyGroup>
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="MonoDevelop.Ide">
@@ -34,11 +38,9 @@
     <Reference Include="MonoDevelop.Core">
       <HintPath>..\..\build\bin\MonoDevelop.Core.dll</HintPath>
     </Reference>
-    <Reference Include="nunit.framework">
-      <HintPath>..\..\packages\NUnit.2.6.4\lib\nunit.framework.dll</HintPath>
-    </Reference>
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="NUnit" Version="$(NuGetVersionNUnit2)" />
     <PackageReference Include="Newtonsoft.Json" Version="12.0.1" />
     <PackageReference Include="QuickGraph" Version="3.6.61119.7" />
   </ItemGroup>
@@ -95,6 +97,9 @@
     <Compile Include="MonoDevelop.StressTest\Profiler\LeakProcessor.cs" />
     <Compile Include="MonoDevelop.StressTest\Profiler\TestScenarioLeakExtensions.cs" />
     <Compile Include="MonoDevelop.StressTest\Profiler\GraphExtensions.cs" />
+    <Compile Include="MonoDevelop.StressTest\IEditorTestScenario.cs" />
+    <Compile Include="UserInterfaceTests\Properties.cs" />
+    <Compile Include="MonoDevelop.StressTest\Profiler\TaskQueue.cs" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="MonoDevelop.StressTest.Attributes\" />

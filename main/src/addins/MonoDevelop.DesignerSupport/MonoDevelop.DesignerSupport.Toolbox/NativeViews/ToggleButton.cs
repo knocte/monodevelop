@@ -34,8 +34,20 @@ using MonoDevelop.Components.Mac;
 
 namespace MonoDevelop.DesignerSupport.Toolbox.NativeViews
 {
-	class ToggleButton : NSButton, INativeChildView
+	sealed class NSEventArgs : EventArgs
 	{
+		public NSEventArgs (NSEvent nsEvent)
+		{
+			Event = nsEvent;
+		}
+
+		public bool Handled { get; set; }
+		public NSEvent Event { get; set; }
+	}
+
+	class ToggleButton : NSButton
+	{
+		public event EventHandler<NSEventArgs> KeyDownPressed;
 		public event EventHandler Focused;
 
 		public override CGSize IntrinsicContentSize => Hidden ? CGSize.Empty : new CGSize (25, 25);
@@ -46,7 +58,6 @@ namespace MonoDevelop.DesignerSupport.Toolbox.NativeViews
 			BezelStyle = NSBezelStyle.RoundRect;
 			SetButtonType (NSButtonType.OnOff);
 			FocusRingType = NSFocusRingType.Default;
-			TranslatesAutoresizingMaskIntoConstraints = false;
 		}
 
 		public override bool BecomeFirstResponder ()
@@ -64,27 +75,16 @@ namespace MonoDevelop.DesignerSupport.Toolbox.NativeViews
 
 		public override void KeyDown (NSEvent theEvent)
 		{
-			base.KeyDown (theEvent);
 			if ((int)theEvent.ModifierFlags == (int) KeyModifierFlag.None && (theEvent.KeyCode == (int)KeyCodes.Enter || theEvent.KeyCode == (int)KeyCodes.Space)) {
 				PerformClick (this);
 			}
+
+			var args = new NSEventArgs (theEvent);
+			KeyDownPressed?.Invoke (this, args);
+
+			if (!args.Handled)
+				base.KeyDown (theEvent);
 		}
-
-		#region INativeChildView
-
-		public void OnKeyPressed (object o, Gtk.KeyPressEventArgs ev)
-		{
-			if (ev.Event.State == Gdk.ModifierType.None && (ev.Event.Key == Gdk.Key.KP_Enter || ev.Event.Key == Gdk.Key.KP_Space)) {
-				PerformClick (this);
-			}
-		}
-
-		public void OnKeyReleased (object o, Gtk.KeyReleaseEventArgs ev)
-		{
-
-		}
-
-		#endregion
 	}
 }
 #endif

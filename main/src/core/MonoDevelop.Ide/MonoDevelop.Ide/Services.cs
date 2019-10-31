@@ -34,6 +34,7 @@ using MonoDevelop.Projects;
 using MonoDevelop.Core.Instrumentation;
 using MonoDevelop.Ide.Editor.Extension;
 using System.Collections.Generic;
+using System;
 
 namespace MonoDevelop.Ide
 {
@@ -47,6 +48,7 @@ namespace MonoDevelop.Ide
 	internal static class Counters
 	{
 		internal static TimerCounter Initialization = InstrumentationService.CreateTimerCounter ("IDE Initialization", "IDE", id:"Ide.Initialization");
+		internal static ITimeTracker InitializationTracker = new NullTimeTracker ();
 		internal static Counter OpenDocuments = InstrumentationService.CreateCounter ("Open documents", "IDE");
 		internal static Counter DocumentsInMemory = InstrumentationService.CreateCounter ("Documents in memory", "IDE");
 		internal static Counter PadsLoaded = InstrumentationService.CreateCounter ("Pads loaded", "IDE");
@@ -68,7 +70,7 @@ namespace MonoDevelop.Ide
 		internal static Counter<CompletionStatisticsMetadata> CodeCompletionStats = InstrumentationService.CreateCounter<CompletionStatisticsMetadata> ("Code Completion Statistics", "IDE", id:"Ide.CodeCompletionStatistics");
 		internal static Counter<TimeToCodeMetadata> TimeToCode = InstrumentationService.CreateCounter<TimeToCodeMetadata> ("Time To Code", "IDE", id: "Ide.TimeToCode");
 		internal static Counter<TimeToCodeMetadata> TimeToIntellisense = InstrumentationService.CreateCounter<TimeToCodeMetadata> ("Time To Intellisense", "IDE", id: "Ide.TimeToIntellisense"); 
-		internal static bool TrackingBuildAndDeploy;
+		internal static ITimeTracker<BuildAndDeployMetadata> BuildAndDeployTracker;
 		internal static TimerCounter<BuildAndDeployMetadata> BuildAndDeploy = InstrumentationService.CreateTimerCounter<BuildAndDeployMetadata> ("Build and Deploy", "IDE", id: "Ide.BuildAndDeploy");
 		internal static Counter<PlatformMemoryMetadata> MemoryPressure = InstrumentationService.CreateCounter<PlatformMemoryMetadata> ("Memory Pressure", "IDE", id: "Ide.MemoryPressure");
 		internal static Counter<PlatformThermalMetadata> ThermalNotification = InstrumentationService.CreateCounter<PlatformThermalMetadata> ("Thermal Notification", "IDE", id: "Ide.ThermalNotification");
@@ -78,13 +80,18 @@ namespace MonoDevelop.Ide
 			public static TimerCounter FileParsed = InstrumentationService.CreateTimerCounter ("File parsed", "Parser Service");
 			public static TimerCounter ObjectSerialized = InstrumentationService.CreateTimerCounter ("Object serialized", "Parser Service");
 			public static TimerCounter ObjectDeserialized = InstrumentationService.CreateTimerCounter ("Object deserialized", "Parser Service");
-			public static TimerCounter WorkspaceItemLoaded = InstrumentationService.CreateTimerCounter ("Workspace item loaded", "Parser Service");
+			public static TimerCounter WorkspaceItemLoaded = InstrumentationService.CreateTimerCounter ("Workspace item loaded", "Parser Service", id:"Ide.Workspace.RoslynWorkspaceLoaded");
 			public static Counter ProjectsLoaded = InstrumentationService.CreateTimerCounter ("Projects loaded", "Parser Service");
 		}
 
+		public static Counter NewEditorEnabled = InstrumentationService.CreateCounter ("New Editor Enabled", "Text Editor", id: "NewTextEditor.Enabled");
+		public static Counter NewEditorDisabled = InstrumentationService.CreateCounter ("New Editor Disabled", "Text Editor", id: "NewTextEditor.Disabled");
+
+		internal static Counter<UpdateCommandInfoCounterMetadata> UpdateCommandTimeoutInfo = InstrumentationService.CreateCounter<UpdateCommandInfoCounterMetadata> ("Slow command update handler timeout", "CommandManager", id: "CommandManager.UpdateCommandInfo.Timeout");
+
 		public static string[] CounterReport ()
 		{
-			string[] reports = new string[15];
+			string[] reports = new string[16];
 			reports [0] = Initialization.ToString ();
 			reports [1] = OpenDocuments.ToString ();
 			reports [2] = DocumentsInMemory.ToString ();
@@ -244,6 +251,25 @@ namespace MonoDevelop.Ide
 
 		public long Duration {
 			get => GetProperty<long> ();
+			set => SetProperty (value);
+		}
+	}
+
+	sealed class NullTimeTracker : ITimeTracker
+	{
+		public TimeSpan Duration { get; }
+
+		public void Dispose () { }
+
+		public void End () { }
+
+		public void Trace (string message) { }
+	}
+
+	class UpdateCommandInfoCounterMetadata : CounterMetadata
+	{
+		public string CommandId {
+			get => GetProperty<string> ();
 			set => SetProperty (value);
 		}
 	}

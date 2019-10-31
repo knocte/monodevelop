@@ -61,9 +61,6 @@ namespace MonoDevelop.StressTest
 		readonly ITestScenarioProvider provider;
 		ProfilerProcessor profilerProcessor;
 
-		const int setupIteration = -1;
-		const int cleanupIteration = int.MinValue;
-
 		public void Start ()
 		{
 			ValidateMonoDevelopBinPath ();
@@ -76,22 +73,63 @@ namespace MonoDevelop.StressTest
 			scenario = provider.GetTestScenario ();
 
 			if (!StartWithProfiler (profilePath, logFile))
-				TestService.StartSession (MonoDevelopBinPath, profilePath, logFile);
+				TestService.StartSession (MonoDevelopBinPath, profilePath, logFile, useNewEditor: Properties.UseNewEditor);
 
 			TestService.Session.DebugObject = new UITestDebug ();
 
-			TestService.Session.WaitForElement (IdeQuery.DefaultWorkbench);
+			TestService.Session.WaitForElement (IdeQuery.DefaultWorkbench, 10000);
 
 			leakProcessor = new LeakProcessor (scenario, ProfilerOptions);
 
-			ReportMemoryUsage (setupIteration);
-			for (int i = 0; i < Iterations; ++i) {
-				scenario.Run ();
-				ReportMemoryUsage (i);
-			}
+			ReportMemoryUsage ("Setup");
+			RunTestScenario ();
 
 			UserInterfaceTests.Ide.CloseAll (exit: false);
-			ReportMemoryUsage (cleanupIteration);
+			ReportMemoryUsage ("Cleanup");
+
+			if (profilerProcessor != null) {
+				var task = profilerProcessor.RemainingHeapshotsTask;
+				if (!task.IsCompleted)
+					Console.WriteLine ("Still processing heapshots...");
+
+				task.Wait ();
+			}
+		}
+
+		void RunTestScenario ()
+		{
+			string suffix = string.Empty;
+			if (scenario is IEditorTestScenario editorTestScenario) {
+				var configuration = editorTestScenario.EditorRunConfiguration;
+				switch (configuration) {
+				case EditorTestRun.Legacy:
+					Properties.UseNewEditor = false;
+					suffix = "_Legacy";
+					break;
+				case EditorTestRun.VSEditor:
+					Properties.UseNewEditor = true;
+					suffix = "_VSEditor";
+					break;
+				case EditorTestRun.Both:
+					// Run once with legacy
+					Properties.UseNewEditor = false;
+					RunScenarioIterations ("_Legacy");
+
+					Properties.UseNewEditor = true;
+					suffix = "_VSEditor";
+					break;
+				}
+			}
+
+			RunScenarioIterations (suffix);
+		}
+
+		void RunScenarioIterations(string suffix)
+		{
+			for (int i = 0; i < Iterations; ++i) {
+				scenario.Run ();
+				ReportMemoryUsage ($"Run_{i}_{suffix}");
+			}
 		}
 
 		bool StartWithProfiler (string profilePath, string logFile)
@@ -109,18 +147,19 @@ namespace MonoDevelop.StressTest
 										 .Select (p => Path.Combine (p, "mono"))
 										 .FirstOrDefault (s => File.Exists (s));
 
-			TestService.StartSession (monoPath, profilePath, logFile, $"{profilerProcessor.GetMonoArguments ()} \"{MonoDevelopBinPath}\"");
+			TestService.StartSession (monoPath, profilePath, logFile, $"{profilerProcessor.GetMonoArguments ()} \"{MonoDevelopBinPath}\"", useNewEditor: Properties.UseNewEditor);
 			Console.WriteLine ($"Profler is logging into {ProfilerOptions.MlpdOutputPath}");
 			return true;
 		}
 
-		public void Stop ()
+		public void Stop (bool success = true)
 		{
 			UserInterfaceTests.Ide.CloseAll ();
 			TestService.EndSession ();
 			OnCleanUp ();
 
-			leakProcessor.ReportResult ();
+			if (success)
+				leakProcessor.ReportResult ();
 		}
 
 		void ValidateMonoDevelopBinPath ()
@@ -177,28 +216,17 @@ namespace MonoDevelop.StressTest
 			}
 		}
 
-		void ReportMemoryUsage (int iteration)
+		void ReportMemoryUsage (string iterationName)
 		{
 			//Make sure IDE stops doing what it was doing
 			UserInterfaceTests.Ide.WaitForIdeIdle ();
 
 			// This is to prevent leaking of AppQuery instances.
 			TestService.Session.DisconnectQueries ();
-			Heapshot heapshot = null;
-			if (profilerProcessor != null) {
-				heapshot = profilerProcessor.TakeHeapshotAndMakeReport ().Result;
-			}
+
+			var heapshotTask = profilerProcessor?.TakeHeapshot ();
 
 			var memoryStats = TestService.Session.MemoryStats;
-
-			string iterationName;
-			if (iteration == cleanupIteration) {
-				iterationName = "Cleanup";
-			} else if (iteration == setupIteration) {
-				iterationName = "Setup";
-			} else {
-				iterationName = string.Format ("Run_{0}", iteration + 1);
-			}
 
 			Console.WriteLine (iterationName);
 
@@ -212,7 +240,8 @@ namespace MonoDevelop.StressTest
 
 			Console.WriteLine ();
 
-			leakProcessor.Process (heapshot, iteration == cleanupIteration, iterationName, memoryStats);
+			if (heapshotTask != null)
+				leakProcessor.Process (heapshotTask, iterationName == "Cleanup", iterationName, memoryStats);
 		}
 	}
 }

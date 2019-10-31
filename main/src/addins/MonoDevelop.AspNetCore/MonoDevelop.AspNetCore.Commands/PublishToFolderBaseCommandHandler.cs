@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Threading.Tasks;
 using System.IO;
@@ -133,7 +133,7 @@ namespace MonoDevelop.AspNetCore.Commands
 			}
 
 			if (Directory.Exists (path))
-				DesktopService.OpenFolder (path);
+				IdeServices.DesktopService.OpenFolder (path);
 			else
 				LoggingService.LogError ("Trying to open {0} but it does not exists.", path);
 		}
@@ -163,7 +163,7 @@ namespace MonoDevelop.AspNetCore.Commands
 
 		protected static bool ProjectSupportsFolderPublishing (DotNetProject project)
 		{
-			return project != null && project.GetProjectCapabilities ().Any (i => i == "Web" || i == "AzureFunctions");
+			return project != null && project.GetProjectCapabilities ().Any (i => i == "Web" || i == "AzureFunctions" || (project.TargetFramework.Id.IsNetStandardOrNetCoreApp () && i == "FolderPublish"));
 		}
 	}
 }

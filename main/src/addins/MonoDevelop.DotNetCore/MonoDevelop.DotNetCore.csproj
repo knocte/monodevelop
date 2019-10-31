@@ -15,20 +15,8 @@
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Xml" />
-    <Reference Include="System.Collections.Immutable">
-      <HintPath>..\..\..\build\bin\System.Collections.Immutable.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>..\..\..\packages\Newtonsoft.Json.10.0.3\lib\net45\Newtonsoft.Json.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Runtime.Serialization" />
-    <Reference Include="NuGet.Versioning">
-      <HintPath>..\..\..\packages\NuGet.Versioning.4.8.0\lib\net46\NuGet.Versioning.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Properties\AssemblyInfo.cs" />
@@ -38,15 +26,9 @@
     <Compile Include="MonoDevelop.DotNetCore\DotNetCorePath.cs" />
     <Compile Include="MonoDevelop.DotNetCore\DotNetCoreExecutionHandler.cs" />
     <Compile Include="MonoDevelop.DotNetCore.Templating\DotNetCoreProjectTemplateWizard.cs" />
-    <Compile Include="MonoDevelop.DotNetCore\DotNetCoreNotInstalledDialog.cs" />
-    <Compile Include="MonoDevelop.DotNetCore\DotNetCoreProjectFileRenamedHandler.cs" />
-    <Compile Include="MonoDevelop.DotNetCore\DotNetCoreProjectReloadMonitor.cs" />
-    <Compile Include="MonoDevelop.DotNetCore\DotNetCoreProjectReader.cs" />
-    <Compile Include="MonoDevelop.DotNetCore\MSBuildProjectExtensions.cs" />
+    <Compile Include="MonoDevelop.DotNetCore\DotNetCoreNotInstalledInfoBar.cs" />
     <Compile Include="MonoDevelop.DotNetCore\DotNetCoreSdkPaths.cs" />
-    <Compile Include="MonoDevelop.DotNetCore\DotNetCoreMSBuildProject.cs" />
     <Compile Include="MonoDevelop.DotNetCore\DotNetCoreCanReferenceProjectExtension.cs" />
-    <Compile Include="MonoDevelop.DotNetCore\DotNetCoreProjectBuilderMaintainer.cs" />
     <Compile Include="MonoDevelop.DotNetCore\DotNetCliToolReference.cs" />
     <Compile Include="MonoDevelop.DotNetCore\DotNetCoreRuntimeOptionsPanel.cs" />
     <Compile Include="MonoDevelop.DotNetCore.Gui\DotNetCoreRuntimeOptionsPanelWidget.cs" />
@@ -57,14 +39,11 @@
     <Compile Include="MonoDevelop.DotNetCore\TargetFrameworkExtensions.cs" />
     <Compile Include="MonoDevelop.DotNetCore\DummyMSBuildOptionsPanel.cs" />
     <Compile Include="MonoDevelop.DotNetCore\TargetFrameworkMonikerExtensions.cs" />
-    <Compile Include="MonoDevelop.DotNetCore\FilePathExtensions.cs" />
-    <Compile Include="MonoDevelop.DotNetCore\MSBuildPropertyGroupExtensions.cs" />
     <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\ProjectDependenciesNode.cs" />
     <Compile Include="MonoDevelop.DotNetCore\ProjectReferenceExtensions.cs" />
     <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\ProjectDependenciesNodeBuilder.cs" />
     <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\AssemblyDependenciesNodeBuilder.cs" />
     <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\AssemblyDependenciesNode.cs" />
-    <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\DotNetCoreProjectReferencesNodeBuilderExtension.cs" />
     <Compile Include="MonoDevelop.DotNetCore\DotNetMigrate.cs" />
     <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\DependenciesNode.cs" />
     <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\DependenciesNodeBuilder.cs" />
@@ -98,7 +77,6 @@
     <Compile Include="MonoDevelop.DotNetCore.Gui\GtkDotNetCoreProjectTemplateWizardPageWidget.cs" />
     <Compile Include="gtk-gui\MonoDevelop.DotNetCore.Gui.GtkDotNetCoreProjectTemplateWizardPageWidget.cs" />
     <Compile Include="MonoDevelop.DotNetCore\MSBuildSdksPathGlobalPropertyProvider.cs" />
-    <Compile Include="MonoDevelop.DotNetCore\DotNetCoreShortTargetFramework.cs" />
     <Compile Include="MonoDevelop.DotNetCore.Templating\DotNetCoreProjectTemplateStringTagProvider.cs" />
     <Compile Include="MonoDevelop.DotNetCore.Gui\DotNetCoreSdkLocationPanel.cs" />
     <Compile Include="MonoDevelop.DotNetCore.Gui\DotNetCoreSdkLocationWidget.cs" />
@@ -107,6 +85,18 @@
     </Compile>
     <Compile Include="MonoDevelop.DotNetCore\MonoRuntimeInfoExtensions.cs" />
     <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\PackageDependencyInfo.cs" />
+    <Compile Include="MonoDevelop.DotNetCore\DotNetCliWatch.cs" />
+    <Compile Include="DotNetCoreDownloadUrl.cs" />
+    <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\PackageDependencyNodePropertyProvider.cs" />
+    <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\PackageDependencyNodeDescriptor.cs" />
+    <Compile Include="MonoDevelop.DotNetCore.Commands\DependenciesNodeCommandHandler.cs" />
+    <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\FrameworkReferenceNodeCache.cs" />
+    <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\FrameworkReferenceNodeBuilder.cs" />
+    <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\FrameworkReferenceNode.cs" />
+    <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\FrameworkReferencesNode.cs" />
+    <Compile Include="MonoDevelop.DotNetCore.NodeBuilders\FrameworkReferencesNodeBuilder.cs" />
+    <Compile Include="MonoDevelop.DotNetCore\DotNetCoreRuntimeSystemInformation.cs" />
+    <Compile Include="MonoDevelop.DotNetCore.Commands\PackCommandHandler.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\external\mono-addins\Mono.Addins\Mono.Addins.csproj">
@@ -147,6 +137,11 @@
     <ProjectReference Include="..\..\..\external\xwt\Xwt\Xwt.csproj">
       <Project>{92494904-35FA-4DC9-BDE9-3A3E87AC49D3}</Project>
       <Name>Xwt</Name>
+      <Private>False</Private>
+    </ProjectReference>
+    <ProjectReference Include="..\MonoDevelop.DesignerSupport\MonoDevelop.DesignerSupport.csproj">
+      <Project>{2C24D515-4A2C-445C-8419-C09231913CFA}</Project>
+      <Name>MonoDevelop.DesignerSupport</Name>
       <Private>False</Private>
     </ProjectReference>
   </ItemGroup>
@@ -224,26 +219,13 @@
     <InternalsVisibleTo Include="MonoDevelop.UnitTesting" />
     <InternalsVisibleTo Include="MonoDevelop.DotNetCore.Tests" />
     <InternalsVisibleTo Include="Xamarin.Forms.Addin" />
+    <InternalsVisibleTo Include="MonoDevelop.AzureFunctions" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="packages.config" />
+    <DownloadNupkg Include="Microsoft.DotNet.Common.ProjectTemplates.1.x" Version="$(TemplatesVersion1x)" ExtensionDir="Templates" />
+    <DownloadNupkg Include="Microsoft.DotNet.Common.ProjectTemplates.2.0" Version="$(TemplatesVersion20)" ExtensionDir="Templates" />
+    <DownloadNupkg Include="Microsoft.DotNet.Test.ProjectTemplates.1.x" Version="$(TemplatesVersion1x)" ExtensionDir="Templates" />
+    <DownloadNupkg Include="Microsoft.DotNet.Test.ProjectTemplates.2.0" Version="$(TemplatesVersion20)" ExtensionDir="Templates" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
-  <Target Name="BeforeBuild">
-     <ItemGroup>
-       <NuGetPackage Include="Microsoft.DotNet.Common.ProjectTemplates.1.x">
-         <Version>$(TemplatesVersion1x)</Version>
-       </NuGetPackage>
-       <NuGetPackage Include="Microsoft.DotNet.Common.ProjectTemplates.2.0">
-         <Version>$(TemplatesVersion20)</Version>
-       </NuGetPackage>
-       <NuGetPackage Include="Microsoft.DotNet.Test.ProjectTemplates.1.x">
-         <Version>$(TemplatesVersion1x)</Version>
-       </NuGetPackage>
-       <NuGetPackage Include="Microsoft.DotNet.Test.ProjectTemplates.2.0">
-         <Version>$(TemplatesVersion20)</Version>
-       </NuGetPackage>
-     </ItemGroup>
-     <Copy SourceFiles="..\..\..\packages\%(NuGetPackage.Identity).%(NuGetPackage.Version)\%(NuGetPackage.Identity).%(NuGetPackage.Version).nupkg" DestinationFolder="$(OutputPath)\Templates" SkipUnchangedFiles="true" />
-   </Target>
 </Project>

@@ -1,4 +1,4 @@
-﻿//
+//
 // MainToolbarController.cs
 //
 // Author:
@@ -26,16 +26,18 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using MonoDevelop.Ide;
+using System.Threading.Tasks;
+using Gtk;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Editor;
+using Mono.Addins;
 using MonoDevelop.Components.Commands;
 using MonoDevelop.Components.Commands.ExtensionNodes;
 using MonoDevelop.Core;
-using Gtk;
-using Mono.Addins;
-using MonoDevelop.Projects;
 using MonoDevelop.Core.Execution;
-using System.Text;
-using MonoDevelop.Ide.TypeSystem;
+using MonoDevelop.Ide;
+using MonoDevelop.Ide.Commands;
+using MonoDevelop.Projects;
 
 namespace MonoDevelop.Components.MainToolbar
 {
@@ -76,6 +78,7 @@ namespace MonoDevelop.Components.MainToolbar
 			ToolbarView.SearchEntryChanged += HandleSearchEntryChanged;
 			ToolbarView.SearchEntryActivated += HandleSearchEntryActivated;
 			ToolbarView.SearchEntryKeyPressed += HandleSearchEntryKeyPressed;
+			ToolbarView.PerformCommand += HandleSearchEntryCommand;
 			ToolbarView.SearchEntryResized += (o, e) => PositionPopup ();
 			ToolbarView.SearchEntryLostFocus += (o, e) => {
 				ToolbarView.SearchText = "";
@@ -245,6 +248,7 @@ namespace MonoDevelop.Components.MainToolbar
 				var cmds = IdeApp.CommandService.CreateCommandEntrySet (TargetsMenuPath);
 				if (cmds.Count > 0) {
 					bool needsSeparator = runtimes > 0;
+					var an = DockNotebook.DockNotebook.ActiveNotebook;
 					foreach (CommandEntry ce in cmds) {
 						if (ce.CommandId == Command.Separator) {
 							needsSeparator = true;
@@ -263,6 +267,7 @@ namespace MonoDevelop.Components.MainToolbar
 							}
 						}
 					}
+					DockNotebook.DockNotebook.ActiveNotebook = an;
 				}
 
 				ToolbarView.PlatformSensitivity = runtimes > 1;
@@ -525,6 +530,10 @@ namespace MonoDevelop.Components.MainToolbar
 						var multipleRuntime = new RuntimeModel (this, multiProjectTarget, false, null);
 						foreach (var startupProject in startupProjects) {
 							var runtimeModel = SelectActiveRuntime (startupProject.Item1, preferedRuntimeModel);
+							if (runtimeModel == null) {
+								LoggingService.LogError ($"No runtimeModel for {startupProject.Item1.Name}");
+								continue;
+							}
 							multiProjectTarget.SetExecutionTarget (startupProject.Item1, runtimeModel.ExecutionTarget);
 							multipleRuntime.AddChild (runtimeModel);
 						}
@@ -650,7 +659,7 @@ namespace MonoDevelop.Components.MainToolbar
 				popup.ShowPopup (anchor, PopupPosition.TopRight);
 
 			if (anchor.GdkWindow == null) {
-				var location = new Xwt.Point (anchor.Allocation.Width - popup.Size.Width, anchor.Allocation.Y);
+				var location = new Xwt.Point (anchor.Allocation.X + anchor.Allocation.Width - popup.Size.Width, anchor.Allocation.Y);
 
 				// Need to hard lock the location because Xwt doesn't know that the allocation might be coming from a
 				// Cocoa control and thus has been changed to take macOS monitor layout into consideration
@@ -697,7 +706,7 @@ namespace MonoDevelop.Components.MainToolbar
 				};
 				popup.SelectedItemChanged += delegate {
 					var si = popup?.Content?.SelectedItem;
-					if (si == null || si.Item < 0 || si.Item >= si.DataSource.Count)
+					if (si == null || !si.IsValid)
 						return;
 					var text = si.DataSource [si.Item].AccessibilityMessage;
 					if (string.IsNullOrEmpty (text))
@@ -708,7 +717,8 @@ namespace MonoDevelop.Components.MainToolbar
 				PositionPopup ();
 				popup.Show ();
 			}
-			popup.Update (pattern);
+			// popup.Update () is thread safe, so run it on a bg thread for faster results
+			Task.Run (() => popup.Update (pattern)).Ignore ();
 		}
 
 		void HandleSearchEntryActivated (object sender, EventArgs e)
@@ -717,16 +727,36 @@ namespace MonoDevelop.Components.MainToolbar
 			if (pattern.Pattern == null && pattern.LineNumber > 0) {
 				DestroyPopup ();
 				var doc = IdeApp.Workbench.ActiveDocument;
-				if (doc != null && doc.Editor != null) {
+				if (doc?.GetContent<ITextView> (true) is ITextView view) {
 					doc.Select ();
-					doc.Editor.CaretLocation = new MonoDevelop.Ide.Editor.DocumentLocation (pattern.LineNumber, pattern.Column > 0 ? pattern.Column : 1);
-					doc.Editor.CenterToCaret ();
-					doc.Editor.StartCaretPulseAnimation ();
+					var snapshot = view.TextBuffer.CurrentSnapshot;
+					int lineNumber = Math.Min (Math.Max (1, pattern.LineNumber), snapshot.LineCount);
+					var line = snapshot.GetLineFromLineNumber (lineNumber - 1);
+					if (line != null) {
+						view.Caret.MoveTo (new SnapshotPoint (snapshot, line.Start + Math.Max (0, Math.Min (pattern.Column - 1, line.Length))));
+						IdeApp.CommandService.DispatchCommand (ViewCommands.CenterAndFocusCurrentDocument);
+						ToolbarView.SearchText = "";
+					}
 				}
 				return;
 			}
 			if (popup != null)
 				popup.OpenFile ();
+		}
+
+		void HandleSearchEntryCommand (object sender, SearchEntryCommandArgs args)
+		{
+			if (args.Command == SearchPopupCommand.Cancel) {
+				DestroyPopup ();
+				var doc = IdeApp.Workbench.ActiveDocument;
+				if (doc != null)
+					doc.Select ();
+				return;
+			}
+
+			if (popup != null) {
+				args.Handled = popup.ProcessCommand (args.Command);
+			}
 		}
 
 		void HandleSearchEntryKeyPressed (object sender, Xwt.KeyEventArgs e)
@@ -747,9 +777,9 @@ namespace MonoDevelop.Components.MainToolbar
 		{
 			IdeApp.Workbench.Present ();
 			var text = lastSearchText;
-			var actDoc = IdeApp.Workbench.ActiveDocument;
-			if (actDoc != null && actDoc.Editor != null && actDoc.Editor.IsSomethingSelected) {
-				string selected = actDoc.Editor.SelectedText;
+			var doc = IdeApp.Workbench.ActiveDocument;
+			if (doc?.GetContent<ITextView> () is ITextView view && !view.Selection.IsEmpty) {
+				string selected = view.Selection.SelectedSpans[0].GetText ();
 				int whitespaceIndex = selected.TakeWhile (c => !char.IsWhiteSpace (c)).Count ();
 				text = selected.Substring (0, whitespaceIndex);
 			}
@@ -1167,6 +1197,16 @@ namespace MonoDevelop.Components.MainToolbar
 			public string DisplayString { get; private set; }
 			public string Category { get; set; }
 			public event EventHandler Activated;
+		}
+	}
+
+	public class SearchEntryCommandArgs : HandledEventArgs
+	{
+		public SearchPopupCommand Command { get; private set; }
+
+		public SearchEntryCommandArgs (SearchPopupCommand command)
+		{
+			Command = command;
 		}
 	}
 }

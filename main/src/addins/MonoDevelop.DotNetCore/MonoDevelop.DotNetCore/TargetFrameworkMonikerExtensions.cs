@@ -30,33 +30,6 @@ namespace MonoDevelop.DotNetCore
 {
 	static class TargetFrameworkMonikerExtensions
 	{
-		public static string GetShortFrameworkName (this TargetFrameworkMoniker framework)
-		{
-			if (framework.IsNetFramework ())
-				return GetShortNetFrameworkName (framework);
-
-			string identifier = GetShortFrameworkIdentifier (framework);
-			return identifier + framework.Version;
-		}
-
-		public static string GetShortFrameworkIdentifier (this TargetFrameworkMoniker framework)
-		{
-			if (string.IsNullOrEmpty (framework.Identifier))
-				return string.Empty;
-
-			string shortFrameworkIdentifier = framework.Identifier;
-
-			if (shortFrameworkIdentifier[0] == '.')
-				shortFrameworkIdentifier = shortFrameworkIdentifier.Substring (1);
-
-			return shortFrameworkIdentifier.ToLower ();
-		}
-
-		static string GetShortNetFrameworkName (TargetFrameworkMoniker framework)
-		{
-			return "net" + framework.Version.Replace (".", string.Empty);
-		}
-
 		public static bool IsNetFramework (this TargetFrameworkMoniker framework)
 		{
 			return framework.Identifier == ".NETFramework";
@@ -75,6 +48,24 @@ namespace MonoDevelop.DotNetCore
 		public static bool IsNetStandardOrNetCoreApp (this TargetFrameworkMoniker framework)
 		{
 			return framework.IsNetStandard () || framework.IsNetCoreApp ();
+		}
+
+		public static bool IsNetCoreAppOrHigher (this TargetFrameworkMoniker framework, DotNetCoreVersion version)
+		{
+			DotNetCoreVersion.TryParse (framework.Version, out var dotNetCoreVersion);
+			if (dotNetCoreVersion == null)
+				return false;
+
+			return framework.IsNetCoreApp () && dotNetCoreVersion >= version;
+		}
+
+		public static bool IsNetStandardOrHigher (this TargetFrameworkMoniker framework, DotNetCoreVersion version)
+		{
+			DotNetCoreVersion.TryParse (framework.Version, out var dotNetCoreVersion);
+			if (dotNetCoreVersion == null)
+				return false;
+
+			return framework.IsNetStandard () && dotNetCoreVersion >= version;
 		}
 	}
 }

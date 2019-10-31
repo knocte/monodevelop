@@ -70,19 +70,15 @@ namespace MonoDevelop.DesignerSupport
 			frame = new InvisibleFrame ();
 
 #if MAC
-			isNative = FeatureSwitchService.IsFeatureEnabled ("NativePropertyPanel") ?? false;
+			isNative = true;
 
 			if (isNative) {
 
 				nativeGrid = new MacPropertyGrid ();
 				propertyGrid = nativeGrid;
+				nativeGrid.PropertyGridChanged += Grid_Changed;
+				gtkWidget = new GtkNSViewHost (nativeGrid);
 
-				gtkWidget = Components.Mac.GtkMacInterop.NSViewToGtkWidget (nativeGrid);
-				gtkWidget.CanFocus = true;
-				gtkWidget.Sensitive = true;
-				gtkWidget.Focused += Widget_Focused;
-
-				nativeGrid.Focused += PropertyGrid_Focused;
 				frame.Add (gtkWidget);
 			} else {
 #endif
@@ -100,12 +96,7 @@ namespace MonoDevelop.DesignerSupport
 		{
 			PropertyGridChanged?.Invoke (this, e);
 		}
-#if MAC
-		void Widget_Focused (object o, Gtk.FocusedArgs args)
-		{
-			nativeGrid.BecomeFirstResponder ();
-		}
-#endif
+
 		protected override void Initialize (IPadWindow container)
 		{
 			base.Initialize (container);
@@ -113,10 +104,14 @@ namespace MonoDevelop.DesignerSupport
 
 			propertyGrid.SetToolbarProvider (toolbarProvider);
 
+#if MAC
 			//native cocoa needs content shown to initialize stuff
 			if (isNative) {
 				container.PadContentShown += Window_PadContentShown;
+				container.PadContentHidden += Window_PadContentHidden;
 			}
+#endif
+
 			this.container = container;
 			DesignerSupport.Service.SetPad (this);
 		}
@@ -136,8 +131,8 @@ namespace MonoDevelop.DesignerSupport
 #if MAC
 			if (isNative) {
 				container.PadContentShown -= Window_PadContentShown;
-				nativeGrid.Focused -= PropertyGrid_Focused;
-				gtkWidget.Focused -= Widget_Focused;
+				container.PadContentHidden -= Window_PadContentHidden;
+				nativeGrid.PropertyGridChanged -= Grid_Changed;
 			} else {
 #endif
 				grid.Changed -= Grid_Changed;
@@ -191,18 +186,24 @@ namespace MonoDevelop.DesignerSupport
 			CommandRouteOrigin = null;
 		}
 
+#if MAC
 		void Window_PadContentShown (object sender, EventArgs e)
 		{
 			propertyGrid.OnPadContentShown ();
+
+			if (customWidget && frame.Child is GtkNSViewHost viewHost) {
+				viewHost.Visible = true;
+			}
 		}
-#if MAC
-		void PropertyGrid_Focused (object sender, EventArgs e)
+
+		void Window_PadContentHidden (object sender, EventArgs e)
 		{
-			if (!gtkWidget.HasFocus) {
-				gtkWidget.HasFocus = true;
+			if (customWidget && frame.Child is GtkNSViewHost viewHost) {
+				viewHost.Visible = false;
 			}
 		}
 #endif
+
 		void AttachToolbarIfCustomWidget ()
 		{
 			if (customWidget) {
@@ -229,7 +230,10 @@ namespace MonoDevelop.DesignerSupport
 			customWidget = true;
 			frame.Remove (frame.Child);
 			frame.Add (widget);
-			widget.Show ();			
+			widget.Show ();
+			if (container != null) {
+				widget.Visible = container.ContentVisible;
+			}
 		}
 		
 		void ClearToolbar ()

@@ -1,4 +1,4 @@
-//
+﻿//
 // IdeApp.cs
 //
 // Author:
@@ -38,19 +38,21 @@ using Mono.Addins.Setup;
 using MonoDevelop.Components.Commands;
 
 using MonoDevelop.Projects;
-using MonoDevelop.Ide.Gui.Pads;
 using MonoDevelop.Ide.CustomTools;
 using System.Linq;
 using MonoDevelop.Ide.Gui;
-using MonoDevelop.Ide.Desktop;
 using System.Collections.Generic;
 using MonoDevelop.Components.AutoTest;
 using MonoDevelop.Ide.TypeSystem;
 using MonoDevelop.Ide.Extensions;
 using MonoDevelop.Ide.Templates;
 using System.Threading.Tasks;
-using MonoDevelop.Ide.RoslynServices.Options;
 using MonoDevelop.Ide.RoslynServices;
+using MonoDevelop.Ide.Tasks;
+using MonoDevelop.Ide.TextEditing;
+using MonoDevelop.Ide.Navigation;
+using MonoDevelop.Ide.Fonts;
+using MonoDevelop.Ide.Composition;
 using System.Diagnostics;
 
 namespace MonoDevelop.Ide
@@ -59,14 +61,10 @@ namespace MonoDevelop.Ide
 	{
 		static bool isInitialized;
 		static Workbench workbench;
-		static ProjectOperations projectOperations;
-		static HelpOperations helpOperations;
 		static CommandManager commandService;
-		static IdeServices ideServices;
-		static RootWorkspace workspace;
-		readonly static IdePreferences preferences;
+		static TypeSystemService typeSystemService;
+		static TaskCompletionSource<bool> initializationTask = new TaskCompletionSource<bool> ();
 
-		static bool isMainRunning;
 		static bool isInitialRun;
 		static bool isInitialRunAfterUpgrade;
 		static Version upgradedFromVersion;
@@ -103,22 +101,8 @@ namespace MonoDevelop.Ide
 			}
 		}
 
-		static TimeToCodeMetadata ttcMetadata;
-		static Stopwatch ttcStopwatch;
-		static long startupCompletedTicks;
-		static long ttcDuration = 3 * TimeSpan.TicksPerSecond; // Wait 3 seconds before ignoring TTC events
-
-		internal static void OnStartupCompleted (StartupMetadata startupMetadata, Stopwatch ttcTimer)
+		internal static void OnStartupCompleted ()
 		{
-			ttcMetadata = new TimeToCodeMetadata {
-				StartupTime = startupMetadata.CorrectedStartupTime
-			};
-			ttcMetadata.AddProperties (startupMetadata);
-
-			ttcStopwatch = ttcTimer;
-			startupCompletedTicks = ttcStopwatch.ElapsedTicks;
-			LoggingService.LogDebug ("TTC starting");
-
 			startupCompleted?.Invoke (null, EventArgs.Empty);
 		}
 
@@ -147,36 +131,27 @@ namespace MonoDevelop.Ide
 			get { return CommandService.ApplicationHasFocus; }
 		}
 
-		static IdeApp ()
-		{
-			preferences = new IdePreferences ();
-		}
-		
 		public static Workbench Workbench {
 			get { return workbench; }
 		}
-		
-		public static ProjectOperations ProjectOperations {
-			get { return projectOperations; }
-		}
-		
-		public static RootWorkspace Workspace {
-			get { return workspace; }
-		}
-		
-		public static HelpOperations HelpOperations {
-			get { return helpOperations; }
-		}
-		
+
+		public static ProjectOperations ProjectOperations => IdeServices.ProjectOperations;
+
+		public static RootWorkspace Workspace => Runtime.PeekService<RootWorkspace> ();
+
 		public static CommandManager CommandService {
 			get { return commandService; }
 		}
-		
-		public static IdeServices Services {
-			get { return ideServices; }
+
+		public static TypeSystemService TypeSystemService {
+			get {
+				if (typeSystemService == null)
+					typeSystemService = Runtime.GetService<TypeSystemService> ().Result;
+				return typeSystemService;
+			}
 		}
 
-		public static IdePreferences Preferences => preferences;
+		public static IdePreferences Preferences { get; } = new IdePreferences ();
 
 		public static bool IsInitialized {
 			get {
@@ -205,79 +180,36 @@ namespace MonoDevelop.Ide
 			}
 		}
 
-		public static void Initialize (ProgressMonitor monitor) => Initialize (monitor, false);
+		public enum LaunchType
+		{
+			Unknown,
+			Normal,
+			LaunchedFromFileManager
+		}
 
-		internal static void Initialize (ProgressMonitor monitor, bool hideWelcomePage)
+		static LaunchType launchType = LaunchType.Unknown;
+		public static LaunchType LaunchReason {
+			get => launchType;
+			internal set {
+				launchType = value;
+
+				if (!LaunchCompletionSource.TrySetResult (value)) {
+					LoggingService.LogWarning ($"LaunchReason is already set to {launchType}.");
+				}
+			}
+		}
+
+		internal static TaskCompletionSource<LaunchType> LaunchCompletionSource { get; } = new TaskCompletionSource<LaunchType>();
+
+		public static async Task Initialize (ProgressMonitor monitor, bool hideWelcomePage = false)
 		{
 			// Already done in IdeSetup, but called again since unit tests don't use IdeSetup.
 			DispatchService.Initialize ();
 
-			Counters.Initialization.Trace ("Creating Workbench");
-			workbench = new Workbench ();
-
-			Counters.Initialization.Trace ("Creating Root Workspace");
-			workspace = new RootWorkspace ();
-			Counters.Initialization.Trace ("Creating Services");
-			projectOperations = new ProjectOperations ();
-			helpOperations = new HelpOperations ();
-			commandService = new CommandManager ();
-			ideServices = new IdeServices ();
-			CustomToolService.Init ();
-			
-			commandService.CommandTargetScanStarted += CommandServiceCommandTargetScanStarted;
-			commandService.CommandTargetScanFinished += CommandServiceCommandTargetScanFinished;
-			commandService.KeyBindingFailed += KeyBindingFailed;
-
-			KeyBindingService.LoadBindingsFromExtensionPath ("/MonoDevelop/Ide/KeyBindingSchemes");
-			KeyBindingService.LoadCurrentBindings ("MD2");
-
-			commandService.CommandError += delegate (object sender, CommandErrorArgs args) {
-				LoggingService.LogInternalError (args.ErrorMessage, args.Exception);
-			};
-			
-			FileService.ErrorHandler = FileServiceErrorHandler;
-
-			monitor.BeginTask (GettextCatalog.GetString("Loading Workbench"), 5);
-			Counters.Initialization.Trace ("Loading Commands");
-			
-			commandService.LoadCommands ("/MonoDevelop/Ide/Commands");
-			monitor.Step (1);
-
-			// Before startup commands.
-			Counters.Initialization.Trace ("Running Pre-Startup Commands");
-			AddinManager.AddExtensionNodeHandler ("/MonoDevelop/Ide/PreStartupHandlers", OnExtensionChanged);
-			monitor.Step (1);
-
-			Counters.Initialization.Trace ("Initializing Workbench");
-			workbench.Initialize (monitor);
-			monitor.Step (1);
-
-			Counters.Initialization.Trace ("Initializing WelcomePage service");
-			MonoDevelop.Ide.WelcomePage.WelcomePageService.Initialize ();
-			monitor.Step (1);
-
-			Counters.Initialization.Trace ("Realizing Workbench Window");
-			workbench.Realize ("SharpDevelop.Workbench.WorkbenchMemento");
-			monitor.Step (1);
-
-			MessageService.RootWindow = workbench.RootWindow;
-			Xwt.MessageDialog.RootWindow = Xwt.Toolkit.CurrentEngine.WrapWindow (workbench.RootWindow);
-		
-			commandService.EnableIdleUpdate = true;
-
-			if (Customizer != null)
-				Customizer.OnIdeInitialized (hideWelcomePage);
-			
-			// Startup commands
-			Counters.Initialization.Trace ("Running Startup Commands");
-			AddinManager.AddExtensionNodeHandler ("/MonoDevelop/Ide/StartupHandlers", OnExtensionChanged);
-			monitor.Step (1);
-			monitor.EndTask ();
-
 			// Set initial run flags
-			Counters.Initialization.Trace ("Upgrading Settings");
+			Counters.InitializationTracker.Trace ("Upgrading Settings");
 
-			if (PropertyService.Get("MonoDevelop.Core.FirstRun", true)) {
+			if (PropertyService.Get ("MonoDevelop.Core.FirstRun", true)) {
 				isInitialRun = true;
 				PropertyService.Set ("MonoDevelop.Core.FirstRun", false);
 				PropertyService.Set ("MonoDevelop.Core.LastRunVersion", Runtime.Version.ToString ());
@@ -293,19 +225,63 @@ namespace MonoDevelop.Ide
 				PropertyService.Set ("MonoDevelop.Core.LastRunVersion", Runtime.Version.ToString ());
 				PropertyService.SaveProperties ();
 			}
-			
-			// The ide is now initialized
 
-			isInitialized = true;
+			Counters.InitializationTracker.Trace ("Initializing WelcomePage service");
+			WelcomePage.WelcomePageService.Initialize (hideWelcomePage).Ignore ();
+
+			// Pump the UI thread to make the start window visible
+
+			await Task.Yield ();
+
+			Counters.InitializationTracker.Trace ("Creating Services");
+
+			var serviceInitialization = Task.WhenAll (
+				Runtime.GetService<DesktopService> (),
+				Runtime.GetService<FontService> (),
+				Runtime.GetService<TaskService> (),
+				Runtime.GetService<ProjectOperations> (),
+				Runtime.GetService<TextEditorService> (),
+				Runtime.GetService<NavigationHistoryService> (),
+				Runtime.GetService<DisplayBindingService> (),
+				Runtime.GetService<RootWorkspace> (),
+				Runtime.GetService<HelpOperations> (),
+				Runtime.GetService<HelpService> ()
+			);
+
+			commandService = await Runtime.GetService<CommandManager> ();
+
+			await serviceInitialization;
+
+			Counters.InitializationTracker.Trace ("Creating Workbench");
+			workbench = new Workbench ();
+
+			Counters.InitializationTracker.Trace ("Creating Root Workspace");
+
+			CustomToolService.Init ();
 			
-			if (initializedEvent != null) {
-				initializedEvent (null, EventArgs.Empty);
-				initializedEvent = null;
-			}
-			
-			//FIXME: we should really make this on-demand. consumers can display a "loading help cache" message like VS
-			MonoDevelop.Projects.HelpService.AsyncInitialize ();
-			
+			FileService.ErrorHandler = FileServiceErrorHandler;
+
+			monitor.BeginTask (GettextCatalog.GetString("Loading Workbench"), 3);
+
+			// Before startup commands.
+			Counters.InitializationTracker.Trace ("Running Pre-Startup Commands");
+			AddinManager.AddExtensionNodeHandler ("/MonoDevelop/Ide/PreStartupHandlers", OnExtensionChanged);
+			monitor.Step (1);
+
+			Counters.InitializationTracker.Trace ("Initializing Workbench");
+			await workbench.Initialize (monitor);
+			monitor.Step (1);
+
+			MessageService.RootWindow = workbench.RootWindow;
+			Xwt.MessageDialog.RootWindow = Xwt.Toolkit.CurrentEngine.WrapWindow (workbench.RootWindow);
+		
+			commandService.EnableIdleUpdate = true;
+
+			if (Customizer != null)
+				Customizer.OnIdeInitialized ();
+
+			monitor.EndTask ();
+
 			UpdateInstrumentationIcon ();
 			IdeApp.Preferences.EnableInstrumentation.Changed += delegate {
 				UpdateInstrumentationIcon ();
@@ -314,100 +290,80 @@ namespace MonoDevelop.Ide
 			AutoTestService.NotifyEvent ("MonoDevelop.Ide.IdeStart");
 
 			Gtk.LinkButton.SetUriHook ((button, uri) => Xwt.Desktop.OpenUrl (uri));
+
+			// Start initializing the type system service in the background
+			Runtime.GetService<TypeSystemService> ().Ignore ();
+
+			// The ide is now initialized
+			OnInitialized ();
 		}
 
-		static void KeyBindingFailed (object sender, KeyBindingFailedEventArgs e)
+		static void OnInitialized ()
 		{
-			Ide.IdeApp.Workbench.StatusBar.ShowWarning (e.Message);
-		}
+			// The ide is now initialized
 
-		internal static void TrackTimeToCode (TimeToCodeMetadata.DocumentType documentType)
-		{
-			LoggingService.LogDebug("Tracking TTC");
-			if (ttcStopwatch == null || timeToCodeSolutionTimer == null) {
-				LoggingService.LogDebug("Ignoring TTC");
-				return;
+			isInitialized = true;
+
+			if (initializedEvent != null) {
+				initializedEvent (null, EventArgs.Empty);
+				initializedEvent = null;
 			}
 
-			ttcStopwatch.Stop ();
-			timeToCodeSolutionTimer.Stop ();
+			initializationTask.SetResult (true);
 
-			if (ttcMetadata == null) {
-				timeToCodeSolutionTimer = null;
-				ttcStopwatch = null;
-				throw new Exception ("SendTimeToCode called before initialisation completed");
-			}
+			// Startup commands
+			Counters.InitializationTracker.Trace ("Running Startup Commands");
+			AddinManager.AddExtensionNodeHandler ("/MonoDevelop/Ide/StartupHandlers", OnExtensionChanged);
 
-			LoggingService.LogDebug ("Processing TTC");
-			ttcMetadata.SolutionLoadTime = timeToCodeSolutionTimer.ElapsedMilliseconds;
-
-			ttcMetadata.CorrectedDuration = ttcStopwatch.ElapsedMilliseconds;
-			ttcMetadata.Type = documentType;
-
-			Counters.TimeToCode.Inc ("SolutionLoaded", ttcMetadata);
-
-			timeToCodeSolutionTimer = null;
-			timeToCodeWorkspaceTimer = Stopwatch.StartNew ();
-
-			MonoDevelopWorkspace.LoadingFinished += CompleteTimeToIntellisense;
+			// Let extensions now access CompositionManager.Instance and start asynchronously composing the catalog
+			CompositionManager.ConfigureUninitializedMefHandling (throwException: false);
+			Runtime.GetService<CompositionManager> ().Ignore ();
 		}
 
-		static void CompleteTimeToIntellisense (object sender, EventArgs e)
+		public static Task EnsureInitializedAsync ()
 		{
-			// Reuse ttcMetadata, as it already has other information set.
-			MonoDevelopWorkspace.LoadingFinished -= CompleteTimeToIntellisense;
-
-			timeToCodeWorkspaceTimer.Stop ();
-
-			ttcMetadata.IntellisenseLoadTime = timeToCodeWorkspaceTimer.ElapsedMilliseconds;
-			ttcMetadata.CorrectedDuration += timeToCodeWorkspaceTimer.ElapsedMilliseconds;
-
-			Counters.TimeToIntellisense.Inc ("IntellisenseLoaded", ttcMetadata);
+			return initializationTask.Task;
 		}
 
-
-		static Stopwatch timeToCodeSolutionTimer = new Stopwatch ();
-		static Stopwatch timeToCodeWorkspaceTimer = null;
-		internal static bool StartTimeToCodeLoadTimer ()
+		public static void BringToFront ()
 		{
-			if (ttcStopwatch.ElapsedTicks - startupCompletedTicks > ttcDuration) {
-				LoggingService.LogDebug ($"Not starting TTC timer: {ttcStopwatch.ElapsedTicks - startupCompletedTicks}");
-				return false;
-			}
-			LoggingService.LogDebug ("Starting TTC timer");
-			timeToCodeSolutionTimer.Start ();
-
-			return true;
+			Initialized += (sender, e) => {
+				if (WelcomePage.WelcomePageService.HasWindowImplementation && !Workbench.RootWindow.Visible) {
+					WelcomePage.WelcomePageService.ShowWelcomeWindow (new Ide.WelcomePage.WelcomeWindowShowOptions (true));
+				} else {
+					Workbench.Present ();
+				}
+			};
 		}
 
 		//this method is MIT/X11, 2009, Michael Hutchinson / (c) Novell
+
 		public static void OpenFiles (IEnumerable<FileOpenInformation> files)
 		{
-			OpenFiles (files, null);
+			OpenFilesAsync (files, null).Ignore ();
+		}
+
+		public static Task<bool> OpenFilesAsync (IEnumerable<FileOpenInformation> files)
+		{
+			return OpenFilesAsync (files, null);
 		}
 
 		//this method is MIT/X11, 2009, Michael Hutchinson / (c) Novell
-		internal static async Task<bool> OpenFiles (IEnumerable<FileOpenInformation> files, OpenWorkspaceItemMetadata metadata)
+		internal static async Task<bool> OpenFilesAsync (IEnumerable<FileOpenInformation> files, OpenWorkspaceItemMetadata metadata)
 		{
 			if (!files.Any ())
 				return false;
-			
-			if (!IsInitialized) {
-				EventHandler onInit = null;
-				onInit = delegate {
-					Initialized -= onInit;
-					OpenFiles (files, metadata);
-				};
-				Initialized += onInit;
-				return false;
-			}
-			
+
+			await initializationTask.Task;
+
+			Workbench.Present ();
+
 			var filteredFiles = new List<FileOpenInformation> ();
 
 			Gdk.ModifierType mtype = Components.GtkWorkarounds.GetCurrentKeyModifiers ();
 			bool closeCurrent = !mtype.HasFlag (Gdk.ModifierType.ControlMask);
 			if (Platform.IsMac && closeCurrent)
-				closeCurrent = !mtype.HasFlag (Gdk.ModifierType.Mod2Mask);
+				closeCurrent = !mtype.HasFlag (Gdk.ModifierType.MetaMask);
 
 			foreach (var file in files) {
 				if (Services.ProjectService.IsWorkspaceItemFile (file.FileName) ||
@@ -422,7 +378,7 @@ namespace MonoDevelop.Ide
 					}
 				} else if (file.FileName.HasExtension ("mpack")) {
 					var service = new SetupService (AddinManager.Registry);
-					AddinManagerWindow.RunToInstallFile (Workbench.RootWindow,
+					AddinManagerWindow.RunToInstallFile (Workbench.RootWindow.Visible ? Workbench.RootWindow : null,
 					                                     service,
 					                                     file.FileName.FullPath);
 				} else {
@@ -435,15 +391,14 @@ namespace MonoDevelop.Ide
 			// restoration won't steal the focus from the files we are explicitly loading here.
 			await Workspace.CurrentWorkspaceLoadTask;
 
-			foreach (var file in filteredFiles) {
-				Workbench.OpenDocument (file.FileName, null, file.Line, file.Column, file.Options).ContinueWith (t => {
-					if (t.IsFaulted)
-						MessageService.ShowError (GettextCatalog.GetString ("Could not open file: {0}", file.FileName), t.Exception);
-				}, TaskScheduler.FromCurrentSynchronizationContext ()).Ignore ();
+			for (int n = 0; n < filteredFiles.Count; n++) {
+				var file = filteredFiles [n];
+				if (n == 0)
+					file.Options |= OpenDocumentOptions.BringToFront;
+				else
+					file.Options &= ~OpenDocumentOptions.BringToFront;
+				IdeServices.DocumentManager.OpenDocument (file).Ignore ();
 			}
-
-			Workbench.Present ();
-
 			return true;
 		}
 
@@ -452,39 +407,38 @@ namespace MonoDevelop.Ide
 			MessageService.ShowError (message, ex);
 			return true;
 		}
-		
+
+		static readonly Stopwatch startupCommandsStopwatch = new Stopwatch ();
+		static readonly CommandInfo reusableCommandInfo = new CommandInfo ();
 		static void OnExtensionChanged (object s, ExtensionNodeEventArgs args)
 		{
 			if (args.Change == ExtensionChange.Add) {
-				try {
-#if DEBUG
-					// Only show this in debug builds for now, we want to enable this later for addins that might delay
-					// IDE startup.
-					if (args.ExtensionNode is TypeExtensionNode node) {
-						LoggingService.LogDebug ("Startup command handler: {0}", node.TypeName);
-					}
-#endif
-					if (args.ExtensionObject is CommandHandler handler) {
+				// Run handlers in different UI loops to avoid freezing the UI for too much time
+				Xwt.Application.Invoke (() => {
+					try {
+						if (!(args.ExtensionObject is CommandHandler handler)) {
+							LoggingService.LogError ("Type " + args.ExtensionObject.GetType () + " must be a subclass of MonoDevelop.Components.Commands.CommandHandler");
+							return;
+						}
+
+						startupCommandsStopwatch.Restart ();
 						handler.InternalRun ();
-					} else {
-						LoggingService.LogError ("Type " + args.ExtensionObject.GetType () + " must be a subclass of MonoDevelop.Components.Commands.CommandHandler");
+						startupCommandsStopwatch.Stop ();
+
+						if (args.ExtensionNode is TypeExtensionNode node) {
+							commandService.OnCommandActivated (node.TypeName, reusableCommandInfo, null, null, CommandSource.Startup, startupCommandsStopwatch.Elapsed);
+#if DEBUG
+							LoggingService.LogDebug ("Startup command handler: {0}", node.TypeName);
+#endif
+						}
+					} catch (Exception ex) {
+						LoggingService.LogError ($"Error while running startup handler {args.ExtensionObject.GetType ()}", ex);
 					}
-				} catch (Exception ex) {
-					LoggingService.LogError (ex.ToString ());
-				}
+				});
 			}
 		}
 		
-		public static void Run ()
-		{
-			// finally run the workbench window ...
-			isMainRunning = true;
-			Gtk.Application.Run ();
-		}
-
-		public static bool IsRunning {
-			get { return isMainRunning; }
-		}
+		public static bool IsRunning { get; internal set; }
 
 		public static bool IsExiting { get; private set; }
 
@@ -496,7 +450,6 @@ namespace MonoDevelop.Ide
 			IsExiting = true;
 			if (await workbench.Close ()) {
 				Gtk.Application.Quit ();
-				isMainRunning = false;
 				return true;
 			}
 			IsExiting = false;
@@ -519,11 +472,11 @@ namespace MonoDevelop.Ide
 				PropertyService.Set ("MonoDevelop.Core.RestartRequested", true);
 
 				try {
-					DesktopService.RestartIde (reopenWorkspace);
+					IdeServices.DesktopService.RestartIde (reopenWorkspace);
 				} catch (Exception ex) {
 					LoggingService.LogError ("Restarting IDE failed", ex);
 				}
-				// return true here even if DesktopService.RestartIde has failed,
+				// return true here even if IdeServices.DesktopService.RestartIde has failed,
 				// because the Ide has already been closed.
 				return true;
 			}
@@ -590,16 +543,16 @@ namespace MonoDevelop.Ide
 				return;
 
 			// If a modal dialog is open, try again later
-			if (DesktopService.IsModalDialogRunning ()) {
+			if (IdeServices.DesktopService.IsModalDialogRunning ()) {
 				DispatchIdleActions (1000);
 				return;
 			}
 
 			// If the user interacted with the IDE just a moment ago, wait a bit more time before
 			// running the action
-			var interactionSpan = (int)(DateTime.Now - commandService.LastUserInteraction).TotalMilliseconds;
+			var interactionSpan = Math.Max (0, (DateTime.Now - commandService.LastUserInteraction).TotalMilliseconds);
 			if (interactionSpan < 500) {
-				DispatchIdleActions (500 - interactionSpan);
+				DispatchIdleActions (500 - (int) interactionSpan);
 				return;
 			}
 
@@ -644,18 +597,6 @@ namespace MonoDevelop.Ide
 			if (Exited != null)
 				Exited (null, EventArgs.Empty);
 		}
-
-		static ITimeTracker commandTimeCounter;
-			
-		static void CommandServiceCommandTargetScanStarted (object sender, EventArgs e)
-		{
-			commandTimeCounter = Counters.CommandTargetScanTime.BeginTiming ();
-		}
-
-		static void CommandServiceCommandTargetScanFinished (object sender, EventArgs e)
-		{
-			commandTimeCounter.End ();
-		}
 		
 		static StatusBarIcon instrumentationStatusIcon;
 		static void UpdateInstrumentationIcon ()
@@ -674,20 +615,5 @@ namespace MonoDevelop.Ide
 				instrumentationStatusIcon.Dispose ();
 			}
 		}
-	}
-	
-	public class IdeServices
-	{
-		readonly Lazy<TemplatingService> templatingService = new Lazy<TemplatingService> (() => new TemplatingService ());
-
-		public ProjectService ProjectService {
-			get { return MonoDevelop.Projects.Services.ProjectService; }
-		}
-
-		public TemplatingService TemplatingService {
-			get { return templatingService.Value; }
-		}
-
-		internal RoslynService RoslynService { get; } = new RoslynService ();
 	}
 }

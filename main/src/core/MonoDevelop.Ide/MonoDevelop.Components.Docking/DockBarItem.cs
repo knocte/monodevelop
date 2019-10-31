@@ -1,4 +1,4 @@
-//
+﻿//
 // DockBarItem.cs
 //
 // Author:
@@ -38,6 +38,8 @@ using Xwt.Motion;
 using Animations = Xwt.Motion.AnimationExtensions;
 using MonoDevelop.Core;
 using MonoDevelop.Ide.Fonts;
+using MonoDevelop.Ide;
+using Gdk;
 
 namespace MonoDevelop.Components.Docking
 {	
@@ -253,7 +255,7 @@ namespace MonoDevelop.Components.Docking
 				label = new Label (it.Label);
 				label.Accessible.SetShouldIgnore (true);
 				label.UseMarkup = true;
-				label.ModifyFont (FontService.SansFont.CopyModified (Styles.FontScale11));
+				label.ModifyFont (IdeServices.FontService.SansFont.CopyModified (Styles.FontScale11));
 
 				if (bar.Orientation == Orientation.Vertical)
 					label.Angle = 270;
@@ -368,6 +370,12 @@ namespace MonoDevelop.Components.Docking
 			if (autoShowTimeout == uint.MaxValue) {
 				autoShowTimeout = GLib.Timeout.Add (bar.Frame.AutoShowDelay, delegate {
 					autoShowTimeout = uint.MaxValue;
+
+					// Check is mouse over - it may be that the LeaveEvent wasn't fired becaues of a gtk bug. So we double check as a work around.
+					GetPointer (out int x, out int y);
+					bool isMouseOver = x >= 0 && y >= 0 && x <= Allocation.Width && y <= Allocation.Height;
+					if (!isMouseOver)
+						return false;
 					AutoShow ();
 					return false;
 				});
@@ -429,11 +437,23 @@ namespace MonoDevelop.Components.Docking
 		
 		protected override bool OnEnterNotifyEvent (Gdk.EventCrossing evnt)
 		{
+			ScheduleAutoShowOnHover();
+			return base.OnEnterNotifyEvent (evnt);
+		}
+
+		protected override bool OnMotionNotifyEvent (EventMotion evnt)
+		{
+			ScheduleAutoHide (true);
+			ScheduleAutoShowOnHover ();
+			return base.OnMotionNotifyEvent (evnt);
+		}
+
+		void ScheduleAutoShowOnHover ()
+		{
 			if (bar.HoverActivationEnabled && autoShowFrame == null) {
 				ScheduleAutoShow ();
 				QueueDraw ();
 			}
-			return base.OnEnterNotifyEvent (evnt);
 		}
 
 		void OnPerformPress (object sender, EventArgs args)

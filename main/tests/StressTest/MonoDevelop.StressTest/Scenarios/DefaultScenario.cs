@@ -29,41 +29,37 @@ using System.Collections.Generic;
 using System.Linq;
 using MonoDevelop.Core;
 using MonoDevelop.StressTest.Attributes;
+using NUnit.Framework;
 using UserInterfaceTests;
 
 namespace MonoDevelop.StressTest
 {
 	[NoLeak(typeof (Projects.Solution))]
-	public class DefaultScenario : ITestScenario
+	public class DefaultScenario : IEditorTestScenario
 	{
-		List<FilePath> filesToOpen;
+		readonly FilePath[] filesToOpen = Array.Empty<FilePath> ();
 
 		public DefaultScenario (FilePath solutionFileName)
-			: this (solutionFileName, Enumerable.Empty<string> ())
 		{
 			SolutionFileName = solutionFileName;
 		}
 
-		public DefaultScenario (FilePath solutionFileName, IEnumerable<string> filesToOpen)
+		public DefaultScenario (FilePath solutionFileName, IEnumerable<string> filesToOpen) : this (solutionFileName)
 		{
-			SolutionFileName = solutionFileName;
-
 			this.filesToOpen = filesToOpen
 				.Select (fileToOpen => solutionFileName.ParentDirectory.Combine (fileToOpen))
-				.ToList ();
+				.ToArray ();
 		}
 
+		public EditorTestRun EditorRunConfiguration { get; } = EditorTestRun.Default;
 		public FilePath SolutionFileName { get; set; }
-
-		public IEnumerable<FilePath> FilesToOpen {
-			get { return filesToOpen; }
-		}
-
 		public IEnumerable<string> TextToEnter { get; set; } = Enumerable.Empty<string> ();
 
 		bool firstRun = true;
 
 		[NoLeak ("MonoDevelop.SourceEditor.ExtensibleTextEditor")]
+		[NoLeak ("Microsoft.VisualStudio.Text.Editor.Implementation.CocoaTextViewControl")] // vs-editor-core part of the chain
+		[NoLeak ("MonoDevelop.TextEditor.CocoaTextViewContent")] // MD part of the chain.
 		public void Run ()
 		{
 			if (firstRun) {
@@ -71,27 +67,7 @@ namespace MonoDevelop.StressTest
 				firstRun = false;
 			}
 
-			// Open files.
-			WorkbenchExtensions.OpenFiles (FilesToOpen);
-			UserInterfaceTests.Ide.WaitForIdeIdle ();
-
-			// Make some changes to the active file and then remove the changes.
-			TextEditor.MoveCaretToDocumentStart ();
-			UserInterfaceTests.Ide.WaitForIdeIdle ();
-
-			if (TextToEnter.Any ()) {
-				TextEditor.EnterText (TextToEnter);
-				UserInterfaceTests.Ide.WaitForIdeIdle ();
-
-				WorkbenchExtensions.SaveFile ();
-				UserInterfaceTests.Ide.WaitForIdeIdle ();
-
-				TextEditor.DeleteToLineStart ();
-				UserInterfaceTests.Ide.WaitForIdeIdle ();
-
-				WorkbenchExtensions.SaveFile ();
-				UserInterfaceTests.Ide.WaitForIdeIdle ();
-			}
+			RunTypingTest ();
 
 			// Rebuild.
 			WorkbenchExtensions.RebuildSolution ();
@@ -108,6 +84,45 @@ namespace MonoDevelop.StressTest
 
 			// Close all documents.
 			WorkbenchExtensions.CloseAllOpenFiles ();
+			UserInterfaceTests.Ide.WaitForIdeIdle ();
+		}
+
+		void RunTypingTest ()
+		{
+			var openFile = filesToOpen.LastOrDefault ();
+			if (openFile == null) {
+				return;
+			}
+
+			// Open files.
+			WorkbenchExtensions.OpenFiles (filesToOpen);
+
+			// Wait for the text area to be available.
+			var area = TestService.Session.WaitForElement (IdeQuery.TextAreaForFile (openFile), 30000);
+			Assert.That (area, Has.Length.EqualTo (1));
+
+			UserInterfaceTests.Ide.WaitForIdeIdle ();
+
+			// Go to the start of the document.
+			TextEditor.MoveCaretToDocumentStart ();
+			UserInterfaceTests.Ide.WaitForIdeIdle ();
+
+			if (!TextToEnter.Any ()) {
+				return;
+			}
+
+			// Make some changes to the active file and then remove the changes.
+			TextEditor.EnterText (TextToEnter);
+			UserInterfaceTests.Ide.WaitForIdeIdle ();
+
+			WorkbenchExtensions.SaveFile ();
+			UserInterfaceTests.Ide.WaitForIdeIdle ();
+
+			TextEditor.DeleteToLineStart ();
+			UserInterfaceTests.Ide.WaitForIdeIdle ();
+
+			WorkbenchExtensions.SaveFile ();
+			UserInterfaceTests.Ide.WaitForIdeIdle ();
 		}
 	}
 }

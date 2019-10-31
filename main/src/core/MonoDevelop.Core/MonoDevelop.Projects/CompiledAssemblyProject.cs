@@ -164,11 +164,9 @@ namespace MonoDevelop.Projects
 					}
 
 					ProcessAsyncOperation asyncOp = context.ExecutionHandler.Execute (executionCommand, console);
-					var stopper = monitor.CancellationToken.Register (asyncOp.Cancel);
-
-					await asyncOp.Task;
-
-					stopper.Dispose ();
+					using (var stopper = monitor.CancellationToken.Register (asyncOp.Cancel)) {
+						await asyncOp.Task;
+					}
 
 					monitor.Log.WriteLine (GettextCatalog.GetString ("The application exited with code: {0}", asyncOp.ExitCode));
 				} finally {
@@ -217,11 +215,9 @@ namespace MonoDevelop.Projects
 
 		public override Task<SolutionItem> LoadSolutionItem (ProgressMonitor monitor, SolutionLoadContext ctx, string fileName, MSBuildFileFormat expectedFormat, string typeGuid, string itemGuid)
 		{
-			return Task<SolutionItem>.Factory.StartNew (delegate {
-				CompiledAssemblyProject p = new CompiledAssemblyProject ();
-				p.LoadFrom (fileName);
-				return p;
-			});
+			CompiledAssemblyProject p = new CompiledAssemblyProject ();
+			p.LoadFrom (fileName);
+			return Task.FromResult<SolutionItem> (p);
 		}
 	}
 }
