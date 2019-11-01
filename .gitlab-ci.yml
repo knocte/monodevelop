@@ -10,15 +10,8 @@ stages:
 newmono_build:
   image: ubuntu:18.04
   stage: build
-  artifacts:
-    paths:
-      - bin/*.zip
-    expire_in: 1 week
   script:
     - ./scripts/install_mono_from_microsoft_deb_packages.sh
     - ./configure
-    - apt install -y git && git submodule update --init
-    - msbuild /t:restore main/Main.sln
-    - msbuild main/Main.sln
     - make
     - make install
