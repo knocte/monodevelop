@@ -12,6 +12,6 @@ newmono_build:
   stage: build
   script:
     - ./scripts/install_mono_from_microsoft_deb_packages.sh
-    - ./configure
+    - ./configure --profile=gnome
     - make
     - make install
