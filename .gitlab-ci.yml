@@ -11,6 +11,7 @@ newmono_build:
   stage: build
   script:
     - ./scripts/install_mono_from_microsoft_deb_packages.sh
+    - ./scripts/install_dotnet_sdk_from_microsoft_deb_packages.sh
     - ./configure --profile=gnome
     - make
     - make install
