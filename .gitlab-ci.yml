@@ -1,6 +1,6 @@
 before_script:
   - apt-get update
-  - apt-get install -y automake autoconf gettext git
+  - apt-get install -y automake autoconf gettext git sed
 
 stages:
   - build
